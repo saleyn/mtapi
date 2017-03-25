@@ -1,9 +1,13 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using MTApiService;
 using System.Collections;
+using System.ServiceModel;
+using MtApi5.Requests;
+using MtApi5.Responses;
+using Newtonsoft.Json;
+using System.Threading.Tasks;
 
 namespace MtApi5
 {
@@ -21,20 +25,24 @@ namespace MtApi5
 
         #endregion
 
-        private const char PARAM_SEPARATOR = ';';
+        private const char ParamSeparator = ';';
+        private const string LogProfileName = "MtApi5Client";
 
         public delegate void QuoteHandler(object sender, string symbol, double bid, double ask);
+
+
+        #region Private Fields
+        private MtClient _client;
+        private readonly object _locker = new object();
+        private volatile bool _isBacktestingMode = false;
+        private Mt5ConnectionState _connectionState = Mt5ConnectionState.Disconnected;
+        private int _executorHandle;
+        #endregion
 
         #region Public Methods
         public MtApi5Client()
         {
-            ConnectionState = Mt5ConnectionState.Disconnected;
-
-            mClient.QuoteAdded += new MtClient.MtQuoteHandler(mClient_QuoteAdded);
-            mClient.QuoteRemoved += new MtClient.MtQuoteHandler(mClient_QuoteRemoved);
-            mClient.QuoteUpdated += new MtClient.MtQuoteHandler(mClient_QuoteUpdated);
-            mClient.ServerDisconnected += new EventHandler(mClient_ServerDisconnected);
-            mClient.ServerFailed += new EventHandler(mClient_ServerFailed);
+            LogConfigurator.Setup(LogProfileName);
         }
 
         ///<summary>
@@ -44,15 +52,7 @@ namespace MtApi5
         ///<param name="port">Port of host connection (default 8222) </param>
         public void BeginConnect(string host, int port)
         {
-            //if (string.IsNullOrEmpty(host) == false && (host.Equals("localhost") || host.Equals("127.0.0.1")))
-            //{
-            //    this.BeginConnect(port);
-            //}
-            //else
-            //{
-                Action<string, int> connectAction = Connect;
-                connectAction.BeginInvoke(host, port, null, null);
-            //}
+            Task.Factory.StartNew(() => Connect(host, port));
         }
 
         ///<summary>
@@ -61,8 +61,7 @@ namespace MtApi5
         ///<param name="port">Port of host connection (default 8222) </param>
         public void BeginConnect(int port)
         {
-            Action<int> connectAction = Connect;
-            connectAction.BeginInvoke(port, null, null);
+            Task.Factory.StartNew(() => Connect(port));
         }
 
         ///<summary>
@@ -70,8 +69,7 @@ namespace MtApi5
         ///</summary>
         public void BeginDisconnect()
         {
-            Action disconnectAction = Disconnect;
-            disconnectAction.BeginInvoke(null, null);
+            Task.Factory.StartNew(() => Disconnect(false));
         }
 
         ///<summary>
@@ -79,8 +77,17 @@ namespace MtApi5
         ///</summary>
         public IEnumerable<Mt5Quote> GetQuotes()
         {
-            var quotes = mClient.GetQuotes();
-            return quotes != null ? (from q in quotes select q.Parse()) : null;
+            var client = Client;
+            var quotes = client != null ? client.GetQuotes() : null;
+            return quotes?.Select(q => q.Parse());
+        }
+
+        ///<summary>
+        ///Checks if the Expert Advisor runs in the testing mode..
+        ///</summary>
+        public bool IsTesting()
+        {
+            return SendCommand<bool>(Mt5CommandType.IsTesting, null);
         }
 
         #region Trading functions
@@ -105,9 +112,9 @@ namespace MtApi5
 
             var commandParameters = request.ToArrayList();
 
-            string strResult = sendCommand<string>(Mt5CommandType.OrderSend, commandParameters);
+            var strResult = SendCommand<string>(Mt5CommandType.OrderSend, commandParameters);
 
-            return strResult.ParseResult(PARAM_SEPARATOR, out result); 
+            return strResult.ParseResult(ParamSeparator, out result); 
         }
 
         ///<summary>
@@ -129,9 +136,9 @@ namespace MtApi5
         {
             var commandParameters = new ArrayList { (int)action, symbol, volume, price };
 
-            string strResult = sendCommand<string>(Mt5CommandType.OrderCalcMargin, commandParameters);
+            var strResult = SendCommand<string>(Mt5CommandType.OrderCalcMargin, commandParameters);
 
-            return strResult.ParseResult(PARAM_SEPARATOR, out margin);
+            return strResult.ParseResult(ParamSeparator, out margin);
         }
 
         ///<summary>
@@ -143,20 +150,20 @@ namespace MtApi5
         ///<param name="action">Type of the order, can be one of the two values of the ENUM_ORDER_TYPE enumeration: ORDER_TYPE_BUY or ORDER_TYPE_SELL.</param>
         ///<param name="symbol">Symbol name.</param>
         ///<param name="volume">Volume of the trade operation.</param>
-        ///<param name="price_open">Open price.</param>
-        ///<param name="price_close">Close price.</param>
+        ///<param name="priceOpen">Open price.</param>
+        ///<param name="priceClose">Close price.</param>
         ///<param name="profit">The variable, to which the calculated value of the profit will be written in case the function is successfully executed. 
         ///The estimated profit value depends on many factors, and can differ in different market environments.</param>
         /// <returns>
         /// The function returns true in case of success; otherwise it returns false. If an invalid order type is specified, the function will return false.
         /// </returns>
-        public bool OrderCalcProfit(ENUM_ORDER_TYPE action, string symbol, double volume, double price_open, double price_close, out double profit)
+        public bool OrderCalcProfit(ENUM_ORDER_TYPE action, string symbol, double volume, double priceOpen, double priceClose, out double profit)
         {
-            var commandParameters = new ArrayList { (int)action, symbol, volume, price_open, price_close };
+            var commandParameters = new ArrayList { (int)action, symbol, volume, priceOpen, priceClose };
 
-            string strResult = sendCommand<string>(Mt5CommandType.OrderCalcProfit, commandParameters);
+            var strResult = SendCommand<string>(Mt5CommandType.OrderCalcProfit, commandParameters);
 
-            return strResult.ParseResult(PARAM_SEPARATOR, out profit);
+            return strResult.ParseResult(ParamSeparator, out profit);
         }
 
         ///<summary>
@@ -181,9 +188,9 @@ namespace MtApi5
 
             var commandParameters = request.ToArrayList();
 
-            string strResult = sendCommand<string>(Mt5CommandType.OrderSend, commandParameters);
+            var strResult = SendCommand<string>(Mt5CommandType.OrderSend, commandParameters);
 
-            return strResult.ParseResult(PARAM_SEPARATOR, out result); 
+            return strResult.ParseResult(ParamSeparator, out result); 
         }
 
         ///<summary>
@@ -191,7 +198,7 @@ namespace MtApi5
         ///</summary>
         public int PositionsTotal()
         {
-            return sendCommand<int>(Mt5CommandType.PositionsTotal, null);
+            return SendCommand<int>(Mt5CommandType.PositionsTotal, null);
         }
 
         ///<summary>
@@ -202,7 +209,7 @@ namespace MtApi5
         {
             var commandParameters = new ArrayList { index };
 
-            return sendCommand<string>(Mt5CommandType.PositionGetSymbol, commandParameters);
+            return SendCommand<string>(Mt5CommandType.PositionGetSymbol, commandParameters);
         }
 
         ///<summary>
@@ -213,40 +220,40 @@ namespace MtApi5
         {
             var commandParameters = new ArrayList { symbol };
 
-            return sendCommand<bool>(Mt5CommandType.PositionSelect, commandParameters);
+            return SendCommand<bool>(Mt5CommandType.PositionSelect, commandParameters);
         }
 
         ///<summary>
         ///The function returns the requested property of an open position, pre-selected using PositionGetSymbol or PositionSelect.
         ///</summary>
-        ///<param name="property_id">Identifier of a position property.</param>
-        public double PositionGetDouble(ENUM_POSITION_PROPERTY_DOUBLE property_id)
+        ///<param name="propertyId">Identifier of a position property.</param>
+        public double PositionGetDouble(ENUM_POSITION_PROPERTY_DOUBLE propertyId)
         {
-            var commandParameters = new ArrayList { (int)property_id };
+            var commandParameters = new ArrayList { (int)propertyId };
 
-            return sendCommand<double>(Mt5CommandType.PositionGetDouble, commandParameters);
+            return SendCommand<double>(Mt5CommandType.PositionGetDouble, commandParameters);
         }
 
         ///<summary>
         ///The function returns the requested property of an open position, pre-selected using PositionGetSymbol or PositionSelect.
         ///</summary>
-        ///<param name="property_id">Identifier of a position property.</param>
-        public long PositionGetInteger(ENUM_POSITION_PROPERTY_INTEGER property_id)
+        ///<param name="propertyId">Identifier of a position property.</param>
+        public long PositionGetInteger(ENUM_POSITION_PROPERTY_INTEGER propertyId)
         {
-            var commandParameters = new ArrayList { (int)property_id };
+            var commandParameters = new ArrayList { (int)propertyId };
 
-            return sendCommand<long>(Mt5CommandType.PositionGetInteger, commandParameters);
+            return SendCommand<long>(Mt5CommandType.PositionGetInteger, commandParameters);
         }
 
         ///<summary>
         ///The function returns the requested property of an open position, pre-selected using PositionGetSymbol or PositionSelect.
         ///</summary>
-        ///<param name="property_id">Identifier of a position property.</param>
-        public string PositionGetString(ENUM_POSITION_PROPERTY_STRING property_id)
+        ///<param name="propertyId">Identifier of a position property.</param>
+        public string PositionGetString(ENUM_POSITION_PROPERTY_STRING propertyId)
         {
-            var commandParameters = new ArrayList { (int)property_id };
+            var commandParameters = new ArrayList { (int)propertyId };
 
-            return sendCommand<string>(Mt5CommandType.PositionGetString, commandParameters);
+            return SendCommand<string>(Mt5CommandType.PositionGetString, commandParameters);
         }
 
         ///<summary>
@@ -254,7 +261,7 @@ namespace MtApi5
         ///</summary>
         public int OrdersTotal()
         {
-            return sendCommand<int>(Mt5CommandType.OrdersTotal, null);
+            return SendCommand<int>(Mt5CommandType.OrdersTotal, null);
         }
 
         ///<summary>
@@ -265,7 +272,7 @@ namespace MtApi5
         {
             var commandParameters = new ArrayList { index };
 
-            return sendCommand<ulong>(Mt5CommandType.OrderGetTicket, commandParameters);
+            return SendCommand<ulong>(Mt5CommandType.OrderGetTicket, commandParameters);
         }
 
         ///<summary>
@@ -276,63 +283,63 @@ namespace MtApi5
         {
             var commandParameters = new ArrayList { ticket };
 
-            return sendCommand<bool>(Mt5CommandType.OrderSelect, commandParameters);
+            return SendCommand<bool>(Mt5CommandType.OrderSelect, commandParameters);
         }
 
         ///<summary>
         ///Returns the requested property of an order, pre-selected using OrderGetTicket or OrderSelect.
         ///</summary>
-        ///<param name="property_id"> Identifier of the order property.</param>
-        public double OrderGetDouble(ENUM_ORDER_PROPERTY_DOUBLE property_id)
+        ///<param name="propertyId"> Identifier of the order property.</param>
+        public double OrderGetDouble(ENUM_ORDER_PROPERTY_DOUBLE propertyId)
         {
-            var commandParameters = new ArrayList { (int)property_id };
+            var commandParameters = new ArrayList { (int)propertyId };
 
-            return sendCommand<double>(Mt5CommandType.OrderGetDouble, commandParameters);
+            return SendCommand<double>(Mt5CommandType.OrderGetDouble, commandParameters);
         }
 
         ///<summary>
         ///Returns the requested property of an order, pre-selected using OrderGetTicket or OrderSelect.
         ///</summary>
-        ///<param name="property_id"> Identifier of the order property.</param>
-        public long OrderGetInteger(ENUM_ORDER_PROPERTY_INTEGER property_id)
+        ///<param name="propertyId"> Identifier of the order property.</param>
+        public long OrderGetInteger(ENUM_ORDER_PROPERTY_INTEGER propertyId)
         {
-            var commandParameters = new ArrayList { (int)property_id };
+            var commandParameters = new ArrayList { (int)propertyId };
 
-            return sendCommand<long>(Mt5CommandType.OrderGetInteger, commandParameters);
+            return SendCommand<long>(Mt5CommandType.OrderGetInteger, commandParameters);
         }
 
         ///<summary>
         ///Returns the requested property of an order, pre-selected using OrderGetTicket or OrderSelect.
         ///</summary>
-        ///<param name="property_id"> Identifier of the order property.</param>
-        public string OrderGetString(ENUM_ORDER_PROPERTY_STRING property_id)
+        ///<param name="propertyId"> Identifier of the order property.</param>
+        public string OrderGetString(ENUM_ORDER_PROPERTY_STRING propertyId)
         {
-            var commandParameters = new ArrayList { (int)property_id };
+            var commandParameters = new ArrayList { (int)propertyId };
 
-            return sendCommand<string>(Mt5CommandType.OrderGetString, commandParameters);
+            return SendCommand<string>(Mt5CommandType.OrderGetString, commandParameters);
         }
 
         ///<summary>
         ///Retrieves the history of deals and orders for the specified period of server time.
         ///</summary>
-        ///<param name="from_date">Start date of the request.</param>
-        ///<param name="to_date">End date of the request.</param>
-        public bool HistorySelect(DateTime from_date, DateTime to_date)
+        ///<param name="fromDate">Start date of the request.</param>
+        ///<param name="toDate">End date of the request.</param>
+        public bool HistorySelect(DateTime fromDate, DateTime toDate)
         {
-            var commandParameters = new ArrayList { Mt5TimeConverter.ConvertToMtTime(from_date), Mt5TimeConverter.ConvertToMtTime(to_date) };
+            var commandParameters = new ArrayList { Mt5TimeConverter.ConvertToMtTime(fromDate), Mt5TimeConverter.ConvertToMtTime(toDate) };
 
-            return sendCommand<bool>(Mt5CommandType.HistorySelect, commandParameters);
+            return SendCommand<bool>(Mt5CommandType.HistorySelect, commandParameters);
         }
 
         ///<summary>
         ///Retrieves the history of deals and orders having the specified position identifier.
         ///</summary>
-        ///<param name="position_id">Position identifier that is set to every executed order and every deal.</param>
-        public bool HistorySelectByPosition(long position_id)
+        ///<param name="positionId">Position identifier that is set to every executed order and every deal.</param>
+        public bool HistorySelectByPosition(long positionId)
         {
-            var commandParameters = new ArrayList { position_id };
+            var commandParameters = new ArrayList { positionId };
 
-            return sendCommand<bool>(Mt5CommandType.HistorySelectByPosition, commandParameters);
+            return SendCommand<bool>(Mt5CommandType.HistorySelectByPosition, commandParameters);
         }
 
         ///<summary>
@@ -343,7 +350,7 @@ namespace MtApi5
         {
             var commandParameters = new ArrayList { ticket };
 
-            return sendCommand<bool>(Mt5CommandType.HistoryOrderSelect, commandParameters);
+            return SendCommand<bool>(Mt5CommandType.HistoryOrderSelect, commandParameters);
         }
 
         ///<summary>
@@ -351,7 +358,7 @@ namespace MtApi5
         ///</summary>
         public int HistoryOrdersTotal()
         {
-            return sendCommand<int>(Mt5CommandType.HistoryOrdersTotal, null);
+            return SendCommand<int>(Mt5CommandType.HistoryOrdersTotal, null);
         }
 
         ///<summary>
@@ -362,43 +369,43 @@ namespace MtApi5
         {
             var commandParameters = new ArrayList { index };
 
-            return sendCommand<ulong>(Mt5CommandType.HistoryOrderGetTicket, commandParameters);
+            return SendCommand<ulong>(Mt5CommandType.HistoryOrderGetTicket, commandParameters);
         }
 
         ///<summary>
         ///Returns the requested order property.
         ///</summary>
-        ///<param name="ticket_number">Order ticket.</param>
-        ///<param name="property_id">Identifier of the order property.</param>
-        public double HistoryOrderGetDouble(ulong ticket_number, ENUM_ORDER_PROPERTY_DOUBLE property_id)
+        ///<param name="ticketNumber">Order ticket.</param>
+        ///<param name="propertyId">Identifier of the order property.</param>
+        public double HistoryOrderGetDouble(ulong ticketNumber, ENUM_ORDER_PROPERTY_DOUBLE propertyId)
         {
-            var commandParameters = new ArrayList { ticket_number, (int)property_id };
+            var commandParameters = new ArrayList { ticketNumber, (int)propertyId };
 
-            return sendCommand<double>(Mt5CommandType.HistoryOrderGetDouble, commandParameters);
+            return SendCommand<double>(Mt5CommandType.HistoryOrderGetDouble, commandParameters);
         }
 
         ///<summary>
         ///Returns the requested property of an order. 
         ///</summary>
-        ///<param name="ticket_number">Order ticket.</param>
-        ///<param name="property_id">Identifier of the order property.</param>
-        public long HistoryOrderGetInteger(ulong ticket_number, ENUM_ORDER_PROPERTY_INTEGER property_id)
+        ///<param name="ticketNumber">Order ticket.</param>
+        ///<param name="propertyId">Identifier of the order property.</param>
+        public long HistoryOrderGetInteger(ulong ticketNumber, ENUM_ORDER_PROPERTY_INTEGER propertyId)
         {
-            var commandParameters = new ArrayList { ticket_number, (int)property_id };
+            var commandParameters = new ArrayList { ticketNumber, (int)propertyId };
 
-            return sendCommand<long>(Mt5CommandType.HistoryOrderGetInteger, commandParameters);
+            return SendCommand<long>(Mt5CommandType.HistoryOrderGetInteger, commandParameters);
         }
 
         ///<summary>
         ///Returns the requested property of an order. 
         ///</summary>
-        ///<param name="ticket_number">Order ticket.</param>
-        ///<param name="property_id">Identifier of the order property.</param>
-        public string HistoryOrderGetString(ulong ticket_number, ENUM_ORDER_PROPERTY_STRING property_id)
+        ///<param name="ticketNumber">Order ticket.</param>
+        ///<param name="propertyId">Identifier of the order property.</param>
+        public string HistoryOrderGetString(ulong ticketNumber, ENUM_ORDER_PROPERTY_STRING propertyId)
         {
-            var commandParameters = new ArrayList { ticket_number, (int)property_id };
+            var commandParameters = new ArrayList { ticketNumber, (int)propertyId };
 
-            return sendCommand<string>(Mt5CommandType.HistoryOrderGetString, commandParameters);
+            return SendCommand<string>(Mt5CommandType.HistoryOrderGetString, commandParameters);
         }
 
         ///<summary>
@@ -409,7 +416,7 @@ namespace MtApi5
         {
             var commandParameters = new ArrayList { ticket };
 
-            return sendCommand<bool>(Mt5CommandType.HistoryDealSelect, commandParameters);
+            return SendCommand<bool>(Mt5CommandType.HistoryDealSelect, commandParameters);
         }
 
         ///<summary>
@@ -417,7 +424,7 @@ namespace MtApi5
         ///</summary>
         public int HistoryDealsTotal()
         {
-            return sendCommand<int>(Mt5CommandType.HistoryDealsTotal, null);
+            return SendCommand<int>(Mt5CommandType.HistoryDealsTotal, null);
         }
 
         ///<summary>
@@ -428,52 +435,51 @@ namespace MtApi5
         {
             var commandParameters = new ArrayList { index };
 
-            return sendCommand<ulong>(Mt5CommandType.HistoryDealGetTicket, commandParameters);
+            return SendCommand<ulong>(Mt5CommandType.HistoryDealGetTicket, commandParameters);
         }
 
         ///<summary>
         ///Returns the requested property of a deal. 
         ///</summary>
-        ///<param name="ticket_number">Deal ticket.</param>
-        ///<param name="property_id"> Identifier of a deal property.</param>
-        public double HistoryDealGetDouble(ulong ticket_number, ENUM_DEAL_PROPERTY_DOUBLE property_id)
+        ///<param name="ticketNumber">Deal ticket.</param>
+        ///<param name="propertyId"> Identifier of a deal property.</param>
+        public double HistoryDealGetDouble(ulong ticketNumber, ENUM_DEAL_PROPERTY_DOUBLE propertyId)
         {
-            var commandParameters = new ArrayList { ticket_number, property_id };
+            var commandParameters = new ArrayList { ticketNumber, propertyId };
 
-            return sendCommand<double>(Mt5CommandType.HistoryDealGetDouble, commandParameters);
+            return SendCommand<double>(Mt5CommandType.HistoryDealGetDouble, commandParameters);
         }
 
         ///<summary>
         ///Returns the requested property of a deal. 
         ///</summary>
-        ///<param name="ticket_number">Deal ticket.</param>
-        ///<param name="property_id"> Identifier of a deal property.</param>
-        public long HistoryDealGetInteger(ulong ticket_number, ENUM_DEAL_PROPERTY_INTEGER property_id)
+        ///<param name="ticketNumber">Deal ticket.</param>
+        ///<param name="propertyId"> Identifier of a deal property.</param>
+        public long HistoryDealGetInteger(ulong ticketNumber, ENUM_DEAL_PROPERTY_INTEGER propertyId)
         {
-            var commandParameters = new ArrayList { ticket_number, property_id };
+            var commandParameters = new ArrayList { ticketNumber, propertyId };
 
-            return sendCommand<long>(Mt5CommandType.HistoryDealGetInteger, commandParameters);
+            return SendCommand<long>(Mt5CommandType.HistoryDealGetInteger, commandParameters);
         }
 
         ///<summary>
         ///Returns the requested property of a deal. 
         ///</summary>
-        ///<param name="ticket_number">Deal ticket.</param>
-        ///<param name="property_id"> Identifier of a deal property.</param>
-        public string HistoryDealGetString(ulong ticket_number, ENUM_DEAL_PROPERTY_STRING property_id)
+        ///<param name="ticketNumber">Deal ticket.</param>
+        ///<param name="propertyId"> Identifier of a deal property.</param>
+        public string HistoryDealGetString(ulong ticketNumber, ENUM_DEAL_PROPERTY_STRING propertyId)
         {
-            var commandParameters = new ArrayList { ticket_number, property_id };
+            var commandParameters = new ArrayList { ticketNumber, propertyId };
 
-            return sendCommand<string>(Mt5CommandType.HistoryDealGetString, commandParameters);
+            return SendCommand<string>(Mt5CommandType.HistoryDealGetString, commandParameters);
         }
 
         ///<summary>
         ///Close all open positions. 
         ///</summary>
-        ///<param name="ticket">OrderCloseAll</param>
         public bool OrderCloseAll()
         {
-            return sendCommand<bool>(Mt5CommandType.OrderCloseAll, null);
+            return SendCommand<bool>(Mt5CommandType.OrderCloseAll, null);
         }
 
         ///<summary>
@@ -484,7 +490,25 @@ namespace MtApi5
         {
             var commandParameters = new ArrayList { ticket};
 
-            return sendCommand<bool>(Mt5CommandType.PositionClose, commandParameters);
+            return SendCommand<bool>(Mt5CommandType.PositionClose, commandParameters);
+        }
+
+        /// <summary>
+        /// Opens a position with the specified parameters.
+        /// </summary>
+        /// <param name="symbol">symbol</param>
+        /// <param name="orderType">order type to open position </param>
+        /// <param name="volume">position volume</param>
+        /// <param name="price">execution price</param>
+        /// <param name="sl">Stop Loss price</param>
+        /// <param name="tp">Take Profit price</param>
+        /// <param name="comment">comment</param>
+        /// <returns>true - successful check of the basic structures, otherwise - false.</returns>
+        public bool PositionOpen(string symbol, ENUM_ORDER_TYPE orderType, double volume, double price, double sl, double tp, string comment = "")
+        {
+            var commandParameters = new ArrayList { symbol, (int) orderType, volume, price, sl, tp, comment };
+
+            return SendCommand<bool>(Mt5CommandType.PositionOpen, commandParameters);
         }
         #endregion
 
@@ -493,34 +517,34 @@ namespace MtApi5
         ///<summary>
         ///Returns the value of the corresponding account property. 
         ///</summary>
-        ///<param name="property_id">Identifier of the property.</param>
-        public double AccountInfoDouble(ENUM_ACCOUNT_INFO_DOUBLE property_id)
+        ///<param name="propertyId">Identifier of the property.</param>
+        public double AccountInfoDouble(ENUM_ACCOUNT_INFO_DOUBLE propertyId)
         {
-            var commandParameters = new ArrayList { (int)property_id };
+            var commandParameters = new ArrayList { (int)propertyId };
 
-            return sendCommand<double>(Mt5CommandType.AccountInfoDouble, commandParameters);
+            return SendCommand<double>(Mt5CommandType.AccountInfoDouble, commandParameters);
         }
 
         ///<summary>
         ///Returns the value of the corresponding account property. 
         ///</summary>
-        ///<param name="property_id">Identifier of the property.</param>
-        public long AccountInfoInteger(ENUM_ACCOUNT_INFO_INTEGER property_id)
+        ///<param name="propertyId">Identifier of the property.</param>
+        public long AccountInfoInteger(ENUM_ACCOUNT_INFO_INTEGER propertyId)
         {
-            var commandParameters = new ArrayList { (int)property_id };
+            var commandParameters = new ArrayList { (int)propertyId };
 
-            return sendCommand<long>(Mt5CommandType.AccountInfoInteger, commandParameters);
+            return SendCommand<long>(Mt5CommandType.AccountInfoInteger, commandParameters);
         }
 
         ///<summary>
         ///Returns the value of the corresponding account property. 
         ///</summary>
-        ///<param name="property_id">Identifier of the property.</param>
-        public string AccountInfoString(ENUM_ACCOUNT_INFO_STRING property_id)
+        ///<param name="propertyId">Identifier of the property.</param>
+        public string AccountInfoString(ENUM_ACCOUNT_INFO_STRING propertyId)
         {
-            var commandParameters = new ArrayList { (int)property_id };
+            var commandParameters = new ArrayList { (int)propertyId };
 
-            return sendCommand<string>(Mt5CommandType.AccountInfoString, commandParameters);
+            return SendCommand<string>(Mt5CommandType.AccountInfoString, commandParameters);
         }
         #endregion
 
@@ -528,119 +552,122 @@ namespace MtApi5
         ///<summary>
         ///Returns information about the state of historical data.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe"> Period.</param>
-        ///<param name="prop_id">Identifier of the requested property, value of the ENUM_SERIES_INFO_INTEGER enumeration.</param>
-        public int SeriesInfoInteger(string symbol_name, ENUM_TIMEFRAMES timeframe, ENUM_SERIES_INFO_INTEGER prop_id)
+        ///<param name="propId">Identifier of the requested property, value of the ENUM_SERIES_INFO_INTEGER enumeration.</param>
+        public int SeriesInfoInteger(string symbolName, ENUM_TIMEFRAMES timeframe, ENUM_SERIES_INFO_INTEGER propId)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, (int)prop_id };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, (int)propId };
 
-            return sendCommand<int>(Mt5CommandType.SeriesInfoInteger, commandParameters);
+            return SendCommand<int>(Mt5CommandType.SeriesInfoInteger, commandParameters);
         }
 
         ///<summary>
         ///Returns the number of bars count in the history for a specified symbol and period.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe"> Period.</param>
-        public int Bars(string symbol_name, ENUM_TIMEFRAMES timeframe)
+        public int Bars(string symbolName, ENUM_TIMEFRAMES timeframe)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe };
 
-            return sendCommand<int>(Mt5CommandType.Bars, commandParameters);
+            return SendCommand<int>(Mt5CommandType.Bars, commandParameters);
         }
 
         ///<summary>
         ///Returns the number of bars count in the history for a specified symbol and period.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_time">Bar time corresponding to the first element.</param>
-        ///<param name="stop_time">Bar time corresponding to the last element.</param>
-        public int Bars(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, DateTime stop_time)
+        ///<param name="startTime">Bar time corresponding to the first element.</param>
+        ///<param name="stopTime">Bar time corresponding to the last element.</param>
+        public int Bars(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, DateTime stopTime)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(start_time), Mt5TimeConverter.ConvertToMtTime(stop_time) };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(startTime), Mt5TimeConverter.ConvertToMtTime(stopTime) };
 
-            return sendCommand<int>(Mt5CommandType.Bars2, commandParameters);
+            return SendCommand<int>(Mt5CommandType.Bars2, commandParameters);
         }
 
         ///<summary>
         ///Returns the number of calculated data for the specified indicator.
         ///</summary>
-        ///<param name="indicator_handle">The indicator handle, returned by the corresponding indicator function.</param>
-        public int BarsCalculated(int indicator_handle)
+        ///<param name="indicatorHandle">The indicator handle, returned by the corresponding indicator function.</param>
+        public int BarsCalculated(int indicatorHandle)
         {
-            var commandParameters = new ArrayList { indicator_handle };
+            var commandParameters = new ArrayList { indicatorHandle };
 
-            return sendCommand<int>(Mt5CommandType.BarsCalculated, commandParameters);
+            return SendCommand<int>(Mt5CommandType.BarsCalculated, commandParameters);
         }
 
         ///<summary>
         ///Gets data of a specified buffer of a certain indicator in the necessary quantity.
         ///</summary>
-        ///<param name="indicator_handle">The indicator handle, returned by the corresponding indicator function.</param>
-        ///<param name="buffer_num">The indicator buffer number.</param>
-        ///<param name="start_pos">The position of the first element to copy.</param>
+        ///<param name="indicatorHandle">The indicator handle, returned by the corresponding indicator function.</param>
+        ///<param name="bufferNum">The indicator buffer number.</param>
+        ///<param name="startPos">The position of the first element to copy.</param>
         ///<param name="count">Data count to copy.</param>
         ///<param name="buffer">Array of double type.</param>
-        public int CopyBuffer(int indicator_handle, int buffer_num, int start_pos, int count, out double[] buffer)
+        public int CopyBuffer(int indicatorHandle, int bufferNum, int startPos, int count, out double[] buffer)
         {
-            var commandParameters = new ArrayList { indicator_handle, buffer_num, start_pos, count };
-            buffer = sendCommand<double[]>(Mt5CommandType.CopyBuffer, commandParameters);
-            return buffer != null ? buffer.Length : 0;
+            var commandParameters = new ArrayList { indicatorHandle, bufferNum, startPos, count };
+            buffer = SendCommand<double[]>(Mt5CommandType.CopyBuffer, commandParameters);
+
+            return buffer?.Length ?? 0;
         }
 
         ///<summary>
         ///Gets data of a specified buffer of a certain indicator in the necessary quantity.
         ///</summary>
-        ///<param name="indicator_handle">The indicator handle, returned by the corresponding indicator function.</param>
-        ///<param name="buffer_num">The indicator buffer number.</param>
-        ///<param name="start_time">Bar time, corresponding to the first element.</param>
+        ///<param name="indicatorHandle">The indicator handle, returned by the corresponding indicator function.</param>
+        ///<param name="bufferNum">The indicator buffer number.</param>
+        ///<param name="startTime">Bar time, corresponding to the first element.</param>
         ///<param name="count">Data count to copy.</param>
         ///<param name="buffer">Array of double type.</param>
-        public int CopyBuffer(int indicator_handle, int buffer_num, DateTime start_time, int count, out double[] buffer)
+        public int CopyBuffer(int indicatorHandle, int bufferNum, DateTime startTime, int count, out double[] buffer)
         {
-            var commandParameters = new ArrayList { indicator_handle, buffer_num, Mt5TimeConverter.ConvertToMtTime(start_time), count };
-            buffer = sendCommand<double[]>(Mt5CommandType.CopyBuffer1, commandParameters);
-            return buffer != null ? buffer.Length : 0;
+            var commandParameters = new ArrayList { indicatorHandle, bufferNum, Mt5TimeConverter.ConvertToMtTime(startTime), count };
+            buffer = SendCommand<double[]>(Mt5CommandType.CopyBuffer1, commandParameters);
+
+            return buffer?.Length ?? 0;
         }
 
         ///<summary>
         ///Gets data of a specified buffer of a certain indicator in the necessary quantity.
         ///</summary>
-        ///<param name="indicator_handle">The indicator handle, returned by the corresponding indicator function.</param>
-        ///<param name="buffer_num">The indicator buffer number.</param>
-        ///<param name="start_time">Bar time, corresponding to the first element.</param>
-        ///<param name="stop_time">Bar time, corresponding to the last element.</param>
+        ///<param name="indicatorHandle">The indicator handle, returned by the corresponding indicator function.</param>
+        ///<param name="bufferNum">The indicator buffer number.</param>
+        ///<param name="startTime">Bar time, corresponding to the first element.</param>
+        ///<param name="stopTime">Bar time, corresponding to the last element.</param>
         ///<param name="buffer">Array of double type.</param>
-        public int CopyBuffer(int indicator_handle, int buffer_num, DateTime start_time, DateTime stop_time, out double[] buffer)
+        public int CopyBuffer(int indicatorHandle, int bufferNum, DateTime startTime, DateTime stopTime, out double[] buffer)
         {
-            var commandParameters = new ArrayList { indicator_handle, buffer_num, Mt5TimeConverter.ConvertToMtTime(start_time), Mt5TimeConverter.ConvertToMtTime(stop_time) };
-            buffer = sendCommand<double[]>(Mt5CommandType.CopyBuffer1, commandParameters);
-            return buffer != null ? buffer.Length : 0;
+            var commandParameters = new ArrayList { indicatorHandle, bufferNum, Mt5TimeConverter.ConvertToMtTime(startTime), Mt5TimeConverter.ConvertToMtTime(stopTime) };
+            buffer = SendCommand<double[]>(Mt5CommandType.CopyBuffer1, commandParameters);
+
+            return buffer?.Length ?? 0;
         }
 
         ///<summary>
-        ///Gets history data of MqlRates structure of a specified symbol-period in specified quantity into the rates_array array. The elements ordering of the copied data is from present to the past, i.e., starting position of 0 means the current bar.
+        ///Gets history data of MqlRates structure of a specified symbol-period in specified quantity into the ratesArray array. The elements ordering of the copied data is from present to the past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_pos">The start position for the first element to copy.</param>
+        ///<param name="startPos">The start position for the first element to copy.</param>
         ///<param name="count">Data count to copy.</param>
-        ///<param name="rates_array">Array of MqlRates type.</param>
-        public int CopyRates(string symbol_name, ENUM_TIMEFRAMES timeframe, int start_pos, int count, out MqlRates[] rates_array)
+        ///<param name="ratesArray">Array of MqlRates type.</param>
+        public int CopyRates(string symbolName, ENUM_TIMEFRAMES timeframe, int startPos, int count, out MqlRates[] ratesArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, start_pos, count };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, startPos, count };
 
-            rates_array = null;
+            ratesArray = null;
 
-            var retVal = sendCommand<MtMqlRates[]>(Mt5CommandType.CopyRates, commandParameters);
+            var retVal = SendCommand<MtMqlRates[]>(Mt5CommandType.CopyRates, commandParameters);
             if (retVal != null)
             {
-                rates_array = new MqlRates[retVal.Length];
-                for(int i = 0; i < retVal.Length; i++)
+                ratesArray = new MqlRates[retVal.Length];
+                for(var i = 0; i < retVal.Length; i++)
                 {
-                    rates_array[i] = new MqlRates(Mt5TimeConverter.ConvertFromMtTime(retVal[i].time)
+                    ratesArray[i] = new MqlRates(Mt5TimeConverter.ConvertFromMtTime(retVal[i].time)
                         , retVal[i].open
                         , retVal[i].high
                         , retVal[i].low
@@ -651,30 +678,30 @@ namespace MtApi5
                 }
             }
 
-            return rates_array != null ? rates_array.Length : 0;
+            return ratesArray?.Length ?? 0;
         }
 
         ///<summary>
-        ///Gets history data of MqlRates structure of a specified symbol-period in specified quantity into the rates_array array. The elements ordering of the copied data is from present to the past, i.e., starting position of 0 means the current bar.
+        ///Gets history data of MqlRates structure of a specified symbol-period in specified quantity into the ratesArray array. The elements ordering of the copied data is from present to the past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_time">The start time for the first element to copy.</param>
+        ///<param name="startTime">The start time for the first element to copy.</param>
         ///<param name="count">Data count to copy.</param>
-        ///<param name="rates_array">Array of MqlRates type.</param>
-        public int CopyRates(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, int count, out MqlRates[] rates_array)
+        ///<param name="ratesArray">Array of MqlRates type.</param>
+        public int CopyRates(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, int count, out MqlRates[] ratesArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(start_time), count };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(startTime), count };
 
-            rates_array = null;
+            ratesArray = null;
 
-            var retVal = sendCommand<MtMqlRates[]>(Mt5CommandType.CopyRates1, commandParameters);
+            var retVal = SendCommand<MtMqlRates[]>(Mt5CommandType.CopyRates1, commandParameters);
             if (retVal != null)
             {
-                rates_array = new MqlRates[retVal.Length];
-                for (int i = 0; i < retVal.Length; i++)
+                ratesArray = new MqlRates[retVal.Length];
+                for (var i = 0; i < retVal.Length; i++)
                 {
-                    rates_array[i] = new MqlRates(Mt5TimeConverter.ConvertFromMtTime(retVal[i].time)
+                    ratesArray[i] = new MqlRates(Mt5TimeConverter.ConvertFromMtTime(retVal[i].time)
                         , retVal[i].open
                         , retVal[i].high
                         , retVal[i].low
@@ -685,30 +712,30 @@ namespace MtApi5
                 }
             }
 
-            return rates_array != null ? rates_array.Length : 0;
+            return ratesArray?.Length ?? 0;
         }
 
         ///<summary>
-        ///Gets history data of MqlRates structure of a specified symbol-period in specified quantity into the rates_array array. The elements ordering of the copied data is from present to the past, i.e., starting position of 0 means the current bar.
+        ///Gets history data of MqlRates structure of a specified symbol-period in specified quantity into the ratesArray array. The elements ordering of the copied data is from present to the past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_time">The start time for the first element to copy.</param>
-        ///<param name="stop_time">Bar time, corresponding to the last element to copy.</param>
-        ///<param name="rates_array">Array of MqlRates type.</param>
-        public int CopyRates(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, DateTime stop_time, out MqlRates[] rates_array)
+        ///<param name="startTime">The start time for the first element to copy.</param>
+        ///<param name="stopTime">Bar time, corresponding to the last element to copy.</param>
+        ///<param name="ratesArray">Array of MqlRates type.</param>
+        public int CopyRates(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, DateTime stopTime, out MqlRates[] ratesArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(start_time), Mt5TimeConverter.ConvertToMtTime(stop_time) };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(startTime), Mt5TimeConverter.ConvertToMtTime(stopTime) };
 
-            rates_array = null;
+            ratesArray = null;
 
-            var retVal = sendCommand<MtMqlRates[]>(Mt5CommandType.CopyRates2, commandParameters);
+            var retVal = SendCommand<MtMqlRates[]>(Mt5CommandType.CopyRates2, commandParameters);
             if (retVal != null)
             {
-                rates_array = new MqlRates[retVal.Length];
-                for (int i = 0; i < retVal.Length; i++)
+                ratesArray = new MqlRates[retVal.Length];
+                for (var i = 0; i < retVal.Length; i++)
                 {
-                    rates_array[i] = new MqlRates(Mt5TimeConverter.ConvertFromMtTime(retVal[i].time)
+                    ratesArray[i] = new MqlRates(Mt5TimeConverter.ConvertFromMtTime(retVal[i].time)
                         , retVal[i].open
                         , retVal[i].high
                         , retVal[i].low
@@ -719,445 +746,463 @@ namespace MtApi5
                 }
             }
 
-            return rates_array != null ? rates_array.Length : 0;
+            return ratesArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets to time_array history data of bar opening time for the specified symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_pos">The start position for the first element to copy.</param>
+        ///<param name="startPos">The start position for the first element to copy.</param>
         ///<param name="count">Data count to copy.</param>
-        ///<param name="rates_array">Array of DatetTme type.</param>
-        public int CopyTime(string symbol_name, ENUM_TIMEFRAMES timeframe, int start_pos, int count, out DateTime[] time_array)
+        ///<param name="timeArray">Array of DatetTme type.</param>
+        public int CopyTime(string symbolName, ENUM_TIMEFRAMES timeframe, int startPos, int count, out DateTime[] timeArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, start_pos, count };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, startPos, count };
 
-            time_array = null;
+            timeArray = null;
 
-            var retVal = sendCommand<long[]>(Mt5CommandType.CopyTime, commandParameters);
+            var retVal = SendCommand<long[]>(Mt5CommandType.CopyTime, commandParameters);
             if (retVal != null)
             {
-                time_array = new DateTime[retVal.Length];
-                for (int i = 0; i < retVal.Length; i++)
+                timeArray = new DateTime[retVal.Length];
+                for (var i = 0; i < retVal.Length; i++)
                 {
-                    time_array[i] = Mt5TimeConverter.ConvertFromMtTime(retVal[i]);
+                    timeArray[i] = Mt5TimeConverter.ConvertFromMtTime(retVal[i]);
                 }
             }
 
-            return time_array != null ? time_array.Length : 0;
+            return timeArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets to time_array history data of bar opening time for the specified symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_time">The start time for the first element to copy.</param>
+        ///<param name="startTime">The start time for the first element to copy.</param>
         ///<param name="count">Data count to copy.</param>
-        ///<param name="rates_array">Array of DatetTme type.</param>
-        public int CopyTime(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, int count, out DateTime[] time_array)
+        ///<param name="timeArray">Array of DatetTme type.</param>
+        public int CopyTime(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, int count, out DateTime[] timeArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(start_time), count };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(startTime), count };
 
-            time_array = null;
+            timeArray = null;
 
-            var retVal = sendCommand<long[]>(Mt5CommandType.CopyTime1, commandParameters);
+            var retVal = SendCommand<long[]>(Mt5CommandType.CopyTime1, commandParameters);
             if (retVal != null)
             {
-                time_array = new DateTime[retVal.Length];
-                for (int i = 0; i < retVal.Length; i++)
+                timeArray = new DateTime[retVal.Length];
+                for (var i = 0; i < retVal.Length; i++)
                 {
-                    time_array[i] = Mt5TimeConverter.ConvertFromMtTime(retVal[i]);
+                    timeArray[i] = Mt5TimeConverter.ConvertFromMtTime(retVal[i]);
                 }
             }
 
-            return time_array != null ? time_array.Length : 0;
+            return timeArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets to time_array history data of bar opening time for the specified symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_pos">The start time for the first element to copy.</param>
-        ///<param name="stop_time">Bar time corresponding to the last element to copy.</param>
-        ///<param name="rates_array">Array of DatetTme type.</param>
-        public int CopyTime(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, DateTime stop_time, out DateTime[] time_array)
+        ///<param name="startTime">The start time for the first element to copy.</param>
+        ///<param name="stopTime">Bar time corresponding to the last element to copy.</param>
+        ///<param name="timeArray">Array of DatetTme type.</param>
+        public int CopyTime(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, DateTime stopTime, out DateTime[] timeArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(start_time), Mt5TimeConverter.ConvertToMtTime(stop_time) };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(startTime), Mt5TimeConverter.ConvertToMtTime(stopTime) };
 
-            time_array = null;
+            timeArray = null;
 
-            var retVal = sendCommand<long[]>(Mt5CommandType.CopyTime2, commandParameters);
+            var retVal = SendCommand<long[]>(Mt5CommandType.CopyTime2, commandParameters);
             if (retVal != null)
             {
-                time_array = new DateTime[retVal.Length];
-                for (int i = 0; i < retVal.Length; i++)
+                timeArray = new DateTime[retVal.Length];
+                for (var i = 0; i < retVal.Length; i++)
                 {
-                    time_array[i] = Mt5TimeConverter.ConvertFromMtTime(retVal[i]);
+                    timeArray[i] = Mt5TimeConverter.ConvertFromMtTime(retVal[i]);
                 }
             }
 
-            return time_array != null ? time_array.Length : 0;
+            return timeArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into open_array the history data of bar open prices for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_pos">The start position for the first element to copy.</param>
+        ///<param name="startPos">The start position for the first element to copy.</param>
         ///<param name="count">Data count to copy.</param>
-        ///<param name="rates_array">Array of double type.</param>
-        public int CopyOpen(string symbol_name, ENUM_TIMEFRAMES timeframe, int start_pos, int count, out double[] open_array)
+        ///<param name="openArray">Array of double type.</param>
+        public int CopyOpen(string symbolName, ENUM_TIMEFRAMES timeframe, int startPos, int count, out double[] openArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, start_pos, count };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, startPos, count };
 
-            open_array = sendCommand<double[]>(Mt5CommandType.CopyOpen, commandParameters);
+            openArray = SendCommand<double[]>(Mt5CommandType.CopyOpen, commandParameters);
 
-            return open_array != null ? open_array.Length : 0;
+            return openArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into open_array the history data of bar open prices for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_time">The start time for the first element to copy.</param>
+        ///<param name="startTime">The start time for the first element to copy.</param>
         ///<param name="count">Data count to copy.</param>
-        ///<param name="rates_array">Array of double type.</param>
-        public int CopyOpen(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, int count, out double[] open_array)
+        ///<param name="openArray">Array of double type.</param>
+        public int CopyOpen(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, int count, out double[] openArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(start_time), count };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(startTime), count };
 
-            open_array = sendCommand<double[]>(Mt5CommandType.CopyOpen1, commandParameters);
+            openArray = SendCommand<double[]>(Mt5CommandType.CopyOpen1, commandParameters);
 
-            return open_array != null ? open_array.Length : 0;
+            return openArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into open_array the history data of bar open prices for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_time">The start time for the first element to copy.</param>
-        ///<param name="stop_time">The start time for the last element to copy.</param>
-        ///<param name="rates_array">Array of double type.</param>
-        public int CopyOpen(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, DateTime stop_time, out double[] open_array)
+        ///<param name="startTime">The start time for the first element to copy.</param>
+        ///<param name="stopTime">The start time for the last element to copy.</param>
+        ///<param name="openArray">Array of double type.</param>
+        public int CopyOpen(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, DateTime stopTime, out double[] openArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(start_time), Mt5TimeConverter.ConvertToMtTime(stop_time) };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(startTime), Mt5TimeConverter.ConvertToMtTime(stopTime) };
 
-            open_array = sendCommand<double[]>(Mt5CommandType.CopyOpen2, commandParameters);
+            openArray = SendCommand<double[]>(Mt5CommandType.CopyOpen2, commandParameters);
 
-            return open_array != null ? open_array.Length : 0;
+            return openArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into high_array the history data of highest bar prices for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_pos">The start position for the first element to copy.</param>
+        ///<param name="startPos">The start position for the first element to copy.</param>
         ///<param name="count">Data count to copy.</param>
-        ///<param name="rates_array">Array of double type.</param>
-        public int CopyHigh(string symbol_name, ENUM_TIMEFRAMES timeframe, int start_pos, int count, out double[] high_array)
+        ///<param name="highArray">Array of double type.</param>
+        public int CopyHigh(string symbolName, ENUM_TIMEFRAMES timeframe, int startPos, int count, out double[] highArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, start_pos, count };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, startPos, count };
 
-            high_array = sendCommand<double[]>(Mt5CommandType.CopyHigh, commandParameters);
+            highArray = SendCommand<double[]>(Mt5CommandType.CopyHigh, commandParameters);
 
-            return high_array != null ? high_array.Length : 0;
+            return highArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into high_array the history data of highest bar prices for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_time">The start time for the first element to copy.</param>
+        ///<param name="startTime">The start time for the first element to copy.</param>
         ///<param name="count">Data count to copy.</param>
-        ///<param name="rates_array">Array of double type.</param>
-        public int CopyHigh(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, int count, out double[] high_array)
+        ///<param name="highArray">Array of double type.</param>
+        public int CopyHigh(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, int count, out double[] highArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(start_time), count };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(startTime), count };
 
-            high_array = sendCommand<double[]>(Mt5CommandType.CopyHigh1, commandParameters);
+            highArray = SendCommand<double[]>(Mt5CommandType.CopyHigh1, commandParameters);
 
-            return high_array != null ? high_array.Length : 0;
+            return highArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into high_array the history data of highest bar prices for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_time">The start time for the first element to copy.</param>
-        ///<param name="stop_time">The start time for the last element to copy.</param>
-        ///<param name="rates_array">Array of double type.</param>
-        public int CopyHigh(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, DateTime stop_time, out double[] high_array)
+        ///<param name="startTime">The start time for the first element to copy.</param>
+        ///<param name="stopTime">The start time for the last element to copy.</param>
+        ///<param name="highArray">Array of double type.</param>
+        public int CopyHigh(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, DateTime stopTime, out double[] highArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(start_time), Mt5TimeConverter.ConvertToMtTime(stop_time) };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(startTime), Mt5TimeConverter.ConvertToMtTime(stopTime) };
 
-            high_array = sendCommand<double[]>(Mt5CommandType.CopyHigh2, commandParameters);
+            highArray = SendCommand<double[]>(Mt5CommandType.CopyHigh2, commandParameters);
 
-            return high_array != null ? high_array.Length : 0;
+            return highArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into low_array the history data of minimal bar prices for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_pos">The start position for the first element to copy.</param>
+        ///<param name="startPos">The start position for the first element to copy.</param>
         ///<param name="count">Data count to copy.</param>
-        ///<param name="rates_array">Array of double type.</param>
-        public int CopyLow(string symbol_name, ENUM_TIMEFRAMES timeframe, int start_pos, int count, out double[] low_array)
+        ///<param name="lowArray">Array of double type.</param>
+        public int CopyLow(string symbolName, ENUM_TIMEFRAMES timeframe, int startPos, int count, out double[] lowArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, start_pos, count };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, startPos, count };
 
-            low_array = sendCommand<double[]>(Mt5CommandType.CopyLow, commandParameters);
+            lowArray = SendCommand<double[]>(Mt5CommandType.CopyLow, commandParameters);
 
-            return low_array != null ? low_array.Length : 0;
+            return lowArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into low_array the history data of minimal bar prices for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_time">The start time for the first element to copy.</param>
+        ///<param name="startTime">The start time for the first element to copy.</param>
         ///<param name="count">Data count to copy.</param>
-        ///<param name="rates_array">Array of double type.</param>
-        public int CopyLow(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, int count, out double[] low_array)
+        ///<param name="lowArray">Array of double type.</param>
+        public int CopyLow(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, int count, out double[] lowArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(start_time), count };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(startTime), count };
 
-            low_array = sendCommand<double[]>(Mt5CommandType.CopyLow1, commandParameters);
+            lowArray = SendCommand<double[]>(Mt5CommandType.CopyLow1, commandParameters);
 
-            return low_array != null ? low_array.Length : 0;
+            return lowArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into low_array the history data of minimal bar prices for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_time">The start time for the first element to copy.</param>
-        ///<param name="stop_time">The start time for the last element to copy.</param>
-        ///<param name="rates_array">Array of double type.</param>
-        public int CopyLow(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, DateTime stop_time, out double[] low_array)
+        ///<param name="startTime">The start time for the first element to copy.</param>
+        ///<param name="stopTime">The start time for the last element to copy.</param>
+        ///<param name="lowArray">Array of double type.</param>
+        public int CopyLow(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, DateTime stopTime, out double[] lowArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(start_time), Mt5TimeConverter.ConvertToMtTime(stop_time) };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(startTime), Mt5TimeConverter.ConvertToMtTime(stopTime) };
 
-            low_array = sendCommand<double[]>(Mt5CommandType.CopyLow2, commandParameters);
+            lowArray = SendCommand<double[]>(Mt5CommandType.CopyLow2, commandParameters);
 
-            return low_array != null ? low_array.Length : 0;
+            return lowArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into close_array the history data of bar close prices for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_pos">The start position for the first element to copy.</param>
+        ///<param name="startPos">The start position for the first element to copy.</param>
         ///<param name="count">Data count to copy.</param>
-        ///<param name="rates_array">Array of double type.</param>
-        public int CopyClose(string symbol_name, ENUM_TIMEFRAMES timeframe, int start_pos, int count, out double[] close_array)
+        ///<param name="closeArray">Array of double type.</param>
+        public int CopyClose(string symbolName, ENUM_TIMEFRAMES timeframe, int startPos, int count, out double[] closeArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, start_pos, count };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, startPos, count };
 
-            close_array = sendCommand<double[]>(Mt5CommandType.CopyClose, commandParameters);
+            closeArray = SendCommand<double[]>(Mt5CommandType.CopyClose, commandParameters);
 
-            return close_array != null ? close_array.Length : 0;
+            return closeArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into close_array the history data of bar close prices for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_time">The start time for the first element to copy.</param>
+        ///<param name="startTime">The start time for the first element to copy.</param>
         ///<param name="count">Data count to copy.</param>
-        ///<param name="rates_array">Array of double type.</param>
-        public int CopyClose(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, int count, out double[] close_array)
+        ///<param name="closeArray">Array of double type.</param>
+        public int CopyClose(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, int count, out double[] closeArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(start_time), count };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(startTime), count };
 
-            close_array = sendCommand<double[]>(Mt5CommandType.CopyClose1, commandParameters);
+            closeArray = SendCommand<double[]>(Mt5CommandType.CopyClose1, commandParameters);
 
-            return close_array != null ? close_array.Length : 0;
+            return closeArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into close_array the history data of bar close prices for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_time">The start time for the first element to copy.</param>
-        ///<param name="stop_time">The start time for the last element to copy.</param>
-        ///<param name="rates_array">Array of double type.</param>
-        public int CopyClose(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, DateTime stop_time, out double[] close_array)
+        ///<param name="startTime">The start time for the first element to copy.</param>
+        ///<param name="stopTime">The start time for the last element to copy.</param>
+        ///<param name="closeArray">Array of double type.</param>
+        public int CopyClose(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, DateTime stopTime, out double[] closeArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(start_time), Mt5TimeConverter.ConvertToMtTime(stop_time) };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(startTime), Mt5TimeConverter.ConvertToMtTime(stopTime) };
 
-            close_array = sendCommand<double[]>(Mt5CommandType.CopyClose2, commandParameters);
+            closeArray = SendCommand<double[]>(Mt5CommandType.CopyClose2, commandParameters);
 
-            return close_array != null ? close_array.Length : 0;
+            return closeArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into volume_array the history data of tick volumes for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_pos">The start position for the first element to copy.</param>
+        ///<param name="startPos">The start position for the first element to copy.</param>
         ///<param name="count">Data count to copy.</param>
-        ///<param name="rates_array">Array of long type.</param>
-        public int CopyTickVolume(string symbol_name, ENUM_TIMEFRAMES timeframe, int start_pos, int count, out long[] volume_array)
+        ///<param name="volumeArray">Array of long type.</param>
+        public int CopyTickVolume(string symbolName, ENUM_TIMEFRAMES timeframe, int startPos, int count, out long[] volumeArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, start_pos, count };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, startPos, count };
 
-            volume_array = sendCommand<long[]>(Mt5CommandType.CopyTickVolume, commandParameters);
+            volumeArray = SendCommand<long[]>(Mt5CommandType.CopyTickVolume, commandParameters);
 
-            return volume_array != null ? volume_array.Length : 0;
+            return volumeArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into volume_array the history data of tick volumes for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_time">The start time for the first element to copy.</param>
+        ///<param name="startTime">The start time for the first element to copy.</param>
         ///<param name="count">Data count to copy.</param>
-        ///<param name="rates_array">Array of long type.</param>
-        public int CopyTickVolume(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, int count, out long[] volume_array)
+        ///<param name="volumeArray">Array of long type.</param>
+        public int CopyTickVolume(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, int count, out long[] volumeArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(start_time), count };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(startTime), count };
 
-            volume_array = sendCommand<long[]>(Mt5CommandType.CopyTickVolume1, commandParameters);
+            volumeArray = SendCommand<long[]>(Mt5CommandType.CopyTickVolume1, commandParameters);
 
-            return volume_array != null ? volume_array.Length : 0;
+            return volumeArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into volume_array the history data of tick volumes for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_time">The start time for the first element to copy.</param>
-        ///<param name="stop_time">The start time for the last element to copy.</param>
-        ///<param name="rates_array">Array of long type.</param>
-        public int CopyTickVolume(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, DateTime stop_time, out long[] volume_array)
+        ///<param name="startTime">The start time for the first element to copy.</param>
+        ///<param name="stopTime">The start time for the last element to copy.</param>
+        ///<param name="volumeArray">Array of long type.</param>
+        public int CopyTickVolume(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, DateTime stopTime, out long[] volumeArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(start_time), Mt5TimeConverter.ConvertToMtTime(stop_time) };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(startTime), Mt5TimeConverter.ConvertToMtTime(stopTime) };
 
-            volume_array = sendCommand<long[]>(Mt5CommandType.CopyTickVolume2, commandParameters);
+            volumeArray = SendCommand<long[]>(Mt5CommandType.CopyTickVolume2, commandParameters);
 
-            return volume_array != null ? volume_array.Length : 0;
+            return volumeArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into volume_array the history data of trade volumes for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_pos">The start position for the first element to copy.</param>
+        ///<param name="startPos">The start position for the first element to copy.</param>
         ///<param name="count">Data count to copy.</param>
-        ///<param name="rates_array">Array of long type.</param>
-        public int CopyRealVolume(string symbol_name, ENUM_TIMEFRAMES timeframe, int start_pos, int count, out long[] volume_array)
+        ///<param name="volumeArray">Array of long type.</param>
+        public int CopyRealVolume(string symbolName, ENUM_TIMEFRAMES timeframe, int startPos, int count, out long[] volumeArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, start_pos, count };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, startPos, count };
 
-            volume_array = sendCommand<long[]>(Mt5CommandType.CopyRealVolume, commandParameters);
+            volumeArray = SendCommand<long[]>(Mt5CommandType.CopyRealVolume, commandParameters);
 
-            return volume_array != null ? volume_array.Length : 0;
+            return volumeArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into volume_array the history data of trade volumes for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_time">The start time for the first element to copy.</param>
+        ///<param name="startTime">The start time for the first element to copy.</param>
         ///<param name="count">Data count to copy.</param>
-        ///<param name="rates_array">Array of long type.</param>
-        public int CopyRealVolume(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, int count, out long[] volume_array)
+        ///<param name="volumeArray">Array of long type.</param>
+        public int CopyRealVolume(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, int count, out long[] volumeArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(start_time), count };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(startTime), count };
 
-            volume_array = sendCommand<long[]>(Mt5CommandType.CopyRealVolume1, commandParameters);
+            volumeArray = SendCommand<long[]>(Mt5CommandType.CopyRealVolume1, commandParameters);
 
-            return volume_array != null ? volume_array.Length : 0;
+            return volumeArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into volume_array the history data of trade volumes for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_time">The start time for the first element to copy.</param>
-        ///<param name="stop_time">The start time for the last element to copy.</param>
-        ///<param name="rates_array">Array of long type.</param>
-        public int CopyRealVolume(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, DateTime stop_time, out long[] volume_array)
+        ///<param name="startTime">The start time for the first element to copy.</param>
+        ///<param name="stopTime">The start time for the last element to copy.</param>
+        ///<param name="volumeArray">Array of long type.</param>
+        public int CopyRealVolume(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, DateTime stopTime, out long[] volumeArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(start_time), Mt5TimeConverter.ConvertToMtTime(stop_time) };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(startTime), Mt5TimeConverter.ConvertToMtTime(stopTime) };
 
-            volume_array = sendCommand<long[]>(Mt5CommandType.CopyRealVolume2, commandParameters);
+            volumeArray = SendCommand<long[]>(Mt5CommandType.CopyRealVolume2, commandParameters);
 
-            return volume_array != null ? volume_array.Length : 0;
+            return volumeArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into spread_array the history data of spread values for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_pos">The start position for the first element to copy.</param>
+        ///<param name="startPos">The start position for the first element to copy.</param>
         ///<param name="count">Data count to copy.</param>
-        ///<param name="rates_array">Array of long type.</param>
-        public int CopySpread(string symbol_name, ENUM_TIMEFRAMES timeframe, int start_pos, int count, out int[] spread_array)
+        ///<param name="spreadArray">Array of long type.</param>
+        public int CopySpread(string symbolName, ENUM_TIMEFRAMES timeframe, int startPos, int count, out int[] spreadArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, start_pos, count };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, startPos, count };
 
-            spread_array = sendCommand<int[]>(Mt5CommandType.CopySpread, commandParameters);
+            spreadArray = SendCommand<int[]>(Mt5CommandType.CopySpread, commandParameters);
 
-            return spread_array != null ? spread_array.Length : 0;
+            return spreadArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into spread_array the history data of spread values for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_time">The start time for the first element to copy.</param>
+        ///<param name="startTime">The start time for the first element to copy.</param>
         ///<param name="count">Data count to copy.</param>
-        ///<param name="rates_array">Array of long type.</param>
-        public int CopySpread(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, int count, out int[] spread_array)
+        ///<param name="spreadArray">Array of long type.</param>
+        public int CopySpread(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, int count, out int[] spreadArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(start_time), count };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(startTime), count };
 
-            spread_array = sendCommand<int[]>(Mt5CommandType.CopySpread1, commandParameters);
+            spreadArray = SendCommand<int[]>(Mt5CommandType.CopySpread1, commandParameters);
 
-            return spread_array != null ? spread_array.Length : 0;
+            return spreadArray?.Length ?? 0;
         }
 
         ///<summary>
         ///The function gets into spread_array the history data of spread values for the selected symbol-period pair in the specified quantity. It should be noted that elements ordering is from present to past, i.e., starting position of 0 means the current bar.
         ///</summary>
-        ///<param name="symbol_name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe">Period.</param>
-        ///<param name="start_time">The start time for the first element to copy.</param>
-        ///<param name="stop_time">The start time for the last element to copy.</param>
-        ///<param name="rates_array">Array of long type.</param>
-        public int CopySpread(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, DateTime stop_time, out int[] spread_array)
+        ///<param name="startTime">The start time for the first element to copy.</param>
+        ///<param name="stopTime">The start time for the last element to copy.</param>
+        ///<param name="spreadArray">Array of long type.</param>
+        public int CopySpread(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, DateTime stopTime, out int[] spreadArray)
         {
-            var commandParameters = new ArrayList { symbol_name, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(start_time), Mt5TimeConverter.ConvertToMtTime(stop_time) };
+            var commandParameters = new ArrayList { symbolName, (int)timeframe, Mt5TimeConverter.ConvertToMtTime(startTime), Mt5TimeConverter.ConvertToMtTime(stopTime) };
 
-            spread_array = sendCommand<int[]>(Mt5CommandType.CopySpread2, commandParameters);
+            spreadArray = SendCommand<int[]>(Mt5CommandType.CopySpread2, commandParameters);
 
-            return spread_array != null ? spread_array.Length : 0;
+            return spreadArray?.Length ?? 0;
+        }
+
+
+        ///<summary>
+        ///The function receives ticks in the MqlTick format into ticks_array. In this case, ticks are indexed from the past to the present, i.e. the 0 indexed tick is the oldest one in the array. For tick analysis, check the flags field, which shows what exactly has changed in the tick.
+        ///</summary>
+        ///<param name="symbolName">Symbol name.</param>
+        ///<param name="flags">The flag that determines the type of received ticks.</param>
+        ///<param name="from">The date from which you want to request ticks.  In milliseconds since 1970.01.01. If from=0, the last count ticks will be returned.</param>
+        ///<param name="count">The number of ticks that you want to receive. If the 'from' and 'count' parameters are not specified, all available recent ticks (but not more than 2000) will be written to result.</param>
+        ///<see href="https://www.mql5.com/en/docs/series/copyticks"/>
+        public List<MqlTick> CopyTicks(string symbolName, CopyTicksFlag flags = CopyTicksFlag.All, ulong from = 0, uint count = 0)
+        {
+            var response = SendRequest<CopyTicksResponse>(new CopyTicksRequest
+            {
+                SymbolName = symbolName, Flags = (int)flags, From = from, Count = count
+            });
+            return response.Ticks;
         }
         #endregion
 
@@ -1167,12 +1212,11 @@ namespace MtApi5
         ///Returns the number of available (selected in Market Watch or all) symbols.
         ///</summary>
         ///<param name="selected">Request mode. Can be true or false.</param>
-
         public int SymbolsTotal(bool selected)
         {
             var commandParameters = new ArrayList { selected };
 
-            return sendCommand<int>(Mt5CommandType.SymbolsTotal, commandParameters);
+            return SendCommand<int>(Mt5CommandType.SymbolsTotal, commandParameters);
         }
 
         ///<summary>
@@ -1180,76 +1224,70 @@ namespace MtApi5
         ///</summary>
         ///<param name="pos">Order number of a symbol.</param>
         ///<param name="selected">Request mode. If the value is true, the symbol is taken from the list of symbols selected in MarketWatch. If the value is false, the symbol is taken from the general list.</param>
-
         public string SymbolName(int pos, bool selected)
         {
             var commandParameters = new ArrayList { pos, selected };
 
-            return sendCommand<string>(Mt5CommandType.SymbolName, commandParameters);
+            return SendCommand<string>(Mt5CommandType.SymbolName, commandParameters);
         }
 
         ///<summary>
         ///Selects a symbol in the Market Watch window or removes a symbol from the window.
         ///</summary>
-        ///<param name="name">Symbol name.</param>
+        ///<param name="symbolName">Symbol name.</param>
         ///<param name="selected">Switch. If the value is false, a symbol should be removed from MarketWatch, otherwise a symbol should be selected in this window. A symbol can't be removed if the symbol chart is open, or there are open positions for this symbol.</param>
-
-        public bool SymbolSelect(string name, bool selected)
+        public bool SymbolSelect(string symbolName, bool selected)
         {
-            var commandParameters = new ArrayList { name, selected };
+            var commandParameters = new ArrayList { symbolName, selected };
 
-            return sendCommand<bool>(Mt5CommandType.SymbolSelect, commandParameters);
+            return SendCommand<bool>(Mt5CommandType.SymbolSelect, commandParameters);
         }
 
         ///<summary>
         ///The function checks whether data of a selected symbol in the terminal are synchronized with data on the trade server.
         ///</summary>
-        ///<param name="name">Symbol name.</param>
-
-        public bool SymbolIsSynchronized(string name)
+        ///<param name="symbolName">Symbol name.</param>
+        public bool SymbolIsSynchronized(string symbolName)
         {
-            var commandParameters = new ArrayList { name };
+            var commandParameters = new ArrayList { symbolName };
 
-            return sendCommand<bool>(Mt5CommandType.SymbolIsSynchronized, commandParameters);
+            return SendCommand<bool>(Mt5CommandType.SymbolIsSynchronized, commandParameters);
         }
 
         ///<summary>
         ///Returns the corresponding property of a specified symbol.
         ///</summary>
-        ///<param name="name">Symbol name.</param>
-        ///<param name="prop_id">Identifier of a symbol property.</param>
-
-        public double SymbolInfoDouble(string name, ENUM_SYMBOL_INFO_DOUBLE prop_id)
+        ///<param name="symbolName">Symbol name.</param>
+        ///<param name="propId">Identifier of a symbol property.</param>
+        public double SymbolInfoDouble(string symbolName, ENUM_SYMBOL_INFO_DOUBLE propId)
         {
-            var commandParameters = new ArrayList { name, (int)prop_id };
+            var commandParameters = new ArrayList { symbolName, (int)propId };
 
-            return sendCommand<double>(Mt5CommandType.SymbolInfoDouble, commandParameters);
+            return SendCommand<double>(Mt5CommandType.SymbolInfoDouble, commandParameters);
         }
 
         ///<summary>
         ///Returns the corresponding property of a specified symbol.
         ///</summary>
-        ///<param name="name">Symbol name.</param>
-        ///<param name="prop_id">Identifier of a symbol property.</param>
-
-        public long SymbolInfoInteger(string name, ENUM_SYMBOL_INFO_INTEGER prop_id)
+        ///<param name="symbolName">Symbol name.</param>
+        ///<param name="propId">Identifier of a symbol property.</param>
+        public long SymbolInfoInteger(string symbolName, ENUM_SYMBOL_INFO_INTEGER propId)
         {
-            var commandParameters = new ArrayList { name, (int)prop_id };
+            var commandParameters = new ArrayList { symbolName, (int)propId };
 
-            return sendCommand<long>(Mt5CommandType.SymbolInfoInteger, commandParameters);
+            return SendCommand<long>(Mt5CommandType.SymbolInfoInteger, commandParameters);
         }
 
         ///<summary>
         ///Returns the corresponding property of a specified symbol. 
         ///</summary>
-        ///<param name="name">Symbol name.</param>
-        ///<param name="prop_id">Identifier of a symbol property.</param>
-
-        public string SymbolInfoString(string name, ENUM_SYMBOL_INFO_STRING prop_id)
+        ///<param name="symbolName">Symbol name.</param>
+        ///<param name="propId">Identifier of a symbol property.</param>
+        public string SymbolInfoString(string symbolName, ENUM_SYMBOL_INFO_STRING propId)
         {
-            var commandParameters = new ArrayList { name, (int)prop_id };
+            var commandParameters = new ArrayList { symbolName, (int)propId };
 
-            return sendCommand<string>(Mt5CommandType.SymbolInfoString, commandParameters);
+            return SendCommand<string>(Mt5CommandType.SymbolInfoString, commandParameters);
         }
 
 
@@ -1257,19 +1295,18 @@ namespace MtApi5
         ///The function returns current prices of a specified symbol in a variable of the MqlTick type.
         ///The function returns true if successful, otherwise returns false.
         ///</summary>
-        ///<param name="name">Symbol name.</param>
-        ///<param name="prop_id"> Link to the structure of the MqlTick type, to which the current prices and time of the last price update will be placed.</param>
-
+        ///<param name="symbol">Symbol name.</param>
+        ///<param name="tick"> Link to the structure of the MqlTick type, to which the current prices and time of the last price update will be placed.</param>
         public bool SymbolInfoTick(string symbol, out MqlTick  tick)
         {
             var commandParameters = new ArrayList { symbol };
 
-            var retVal = sendCommand<MtMqlTick>(Mt5CommandType.SymbolInfoTick, commandParameters);
+            var retVal = SendCommand<MtMqlTick>(Mt5CommandType.SymbolInfoTick, commandParameters);
 
             tick = null;
             if (retVal != null)
             {
-                tick = new MqlTick(Mt5TimeConverter.ConvertFromMtTime(retVal.time), retVal.bid, retVal.ask, retVal.last, retVal.volume);
+                tick = new MqlTick { MtTime = retVal.time, ask = retVal.ask, bid = retVal.bid, last = retVal.last, volume = retVal.volume };
             }
 
             return tick != null;
@@ -1280,77 +1317,77 @@ namespace MtApi5
         ///Allows receiving time of beginning and end of the specified quoting sessions for a specified symbol and weekday.
         ///</summary>
         ///<param name="name">Symbol name.</param>
-        ///<param name="day_of_week">Day of the week</param>
-        ///<param name="session_index">Ordinal number of a session, whose beginning and end time we want to receive. Indexing of sessions starts with 0.</param>
+        ///<param name="dayOfWeek">Day of the week</param>
+        ///<param name="sessionIndex">Ordinal number of a session, whose beginning and end time we want to receive. Indexing of sessions starts with 0.</param>
         ///<param name="from">Session beginning time in seconds from 00 hours 00 minutes, in the returned value date should be ignored.</param>
         ///<param name="to">Session end time in seconds from 00 hours 00 minutes, in the returned value date should be ignored.</param>
-        public bool SymbolInfoSessionQuote(string name, ENUM_DAY_OF_WEEK day_of_week, uint session_index, out DateTime from, out DateTime to)
+        public bool SymbolInfoSessionQuote(string name, ENUM_DAY_OF_WEEK dayOfWeek, uint sessionIndex, out DateTime from, out DateTime to)
         {
-            var commandParameters = new ArrayList { name, (int)day_of_week, session_index };
+            var commandParameters = new ArrayList { name, (int)dayOfWeek, sessionIndex };
 
-            string strResult = sendCommand<string>(Mt5CommandType.SymbolInfoSessionQuote, commandParameters);
+            string strResult = SendCommand<string>(Mt5CommandType.SymbolInfoSessionQuote, commandParameters);
 
-            return strResult.ParseResult(PARAM_SEPARATOR, out from, out to); 
+            return strResult.ParseResult(ParamSeparator, out from, out to); 
         }
 
         ///<summary>
         ///Allows receiving time of beginning and end of the specified trading sessions for a specified symbol and weekday.
         ///</summary>
         ///<param name="name">Symbol name.</param>
-        ///<param name="day_of_week">Day of the week</param>
-        ///<param name="session_index">Ordinal number of a session, whose beginning and end time we want to receive. Indexing of sessions starts with 0.</param>
+        ///<param name="dayOfWeek">Day of the week</param>
+        ///<param name="sessionIndex">Ordinal number of a session, whose beginning and end time we want to receive. Indexing of sessions starts with 0.</param>
         ///<param name="from">Session beginning time in seconds from 00 hours 00 minutes, in the returned value date should be ignored.</param>
         ///<param name="to">Session end time in seconds from 00 hours 00 minutes, in the returned value date should be ignored.</param>
-        public bool SymbolInfoSessionTrade(string name, ENUM_DAY_OF_WEEK day_of_week, uint session_index, out DateTime from, out DateTime to)
+        public bool SymbolInfoSessionTrade(string name, ENUM_DAY_OF_WEEK dayOfWeek, uint sessionIndex, out DateTime from, out DateTime to)
         {
-            var commandParameters = new ArrayList { name, (int)day_of_week, session_index };
+            var commandParameters = new ArrayList { name, (int)dayOfWeek, sessionIndex };
 
-            string strResult = sendCommand<string>(Mt5CommandType.SymbolInfoSessionTrade, commandParameters);
+            string strResult = SendCommand<string>(Mt5CommandType.SymbolInfoSessionTrade, commandParameters);
 
-            return strResult.ParseResult(PARAM_SEPARATOR, out from, out to);
+            return strResult.ParseResult(ParamSeparator, out from, out to);
         }
 
         ///<summary>
         ///Provides opening of Depth of Market for a selected symbol, and subscribes for receiving notifications of the DOM changes.
         ///</summary>
-        ///<param name="name">Symbol name.</param>
+        ///<param name="symbol">Symbol name.</param>
         public bool MarketBookAdd(string symbol)
         {
             var commandParameters = new ArrayList { symbol };
 
-            return sendCommand<bool>(Mt5CommandType.MarketBookAdd, commandParameters);
+            return SendCommand<bool>(Mt5CommandType.MarketBookAdd, commandParameters);
         }
 
         ///<summary>
         ///Provides closing of Depth of Market for a selected symbol, and cancels the subscription for receiving notifications of the DOM changes.
         ///</summary>
-        ///<param name="name">Symbol name.</param>
+        ///<param name="symbol">Symbol name.</param>
         public bool MarketBookRelease(string symbol)
         {
             var commandParameters = new ArrayList { symbol };
 
-            return sendCommand<bool>(Mt5CommandType.MarketBookRelease, commandParameters);
+            return SendCommand<bool>(Mt5CommandType.MarketBookRelease, commandParameters);
         }
 
         ///<summary>
         ///Returns a structure array MqlBookInfo containing records of the Depth of Market of a specified symbol.
         ///</summary>
-        ///<param name="name">Symbol name.</param>
+        ///<param name="symbol">Symbol name.</param>
         ///<param name="book">Reference to an array of Depth of Market records.</param>        
         public bool MarketBookGet(string symbol, out MqlBookInfo[] book)
         {
             var commandParameters = new ArrayList { symbol };
 
-            var retVal = sendCommand<MtMqlBookInfo[]>(Mt5CommandType.MarketBookGet, commandParameters);
+            var retVal = SendCommand<MtMqlBookInfo[]>(Mt5CommandType.MarketBookGet, commandParameters);
 
             book = null; 
             if (retVal != null)
             {
                 book = new MqlBookInfo[retVal.Length];
 
-                for (int i = 0; i < retVal.Length; i++)
+                foreach (var t in retVal)
                 {
-                    book[0] = new MqlBookInfo((ENUM_BOOK_TYPE)retVal[i].type, retVal[i].price, retVal[i].volume);                        
+                    book[0] = new MqlBookInfo((ENUM_BOOK_TYPE)t.type, t.price, t.volume);
                 }
             }
 
@@ -1359,13 +1396,56 @@ namespace MtApi5
 
         #endregion
 
+        #region Common Functions
+        ///<summary>
+        ///It enters a message in the Expert Advisor log.
+        ///</summary>
+        ///<param name="message">Symbol name.</param>
+        public bool Print(string message)
+        {
+            var commandParameters = new ArrayList { message };
+
+            return SendCommand<bool>(Mt5CommandType.Print, commandParameters);
+        }
+        #endregion
+
         #endregion
 
         #region Properties
         ///<summary>
         ///Connection status of MetaTrader API.
         ///</summary>
-        public Mt5ConnectionState ConnectionState { get; private set; }
+        public Mt5ConnectionState ConnectionState
+        {
+            get
+            {
+                lock (_locker)
+                {
+                    return _connectionState;
+                }
+            }
+        }
+
+        ///<summary>
+        ///Handle of expert used to execute commands
+        ///</summary>
+        public int ExecutorHandle
+        {
+            get
+            {
+                lock (_locker)
+                {
+                    return _executorHandle;
+                }
+            }
+            set
+            {
+                lock (_locker)
+                {
+                    _executorHandle = value;
+                }
+            }
+        }
         #endregion
 
         #region Events
@@ -1376,149 +1456,222 @@ namespace MtApi5
         #endregion
 
         #region Private Methods
-        private void Connect(string host, int port)
+        private MtClient Client
         {
-            ConnectionState = Mt5ConnectionState.Connecting;
-            ConnectionStateChanged.FireEvent(this
-                , new Mt5ConnectionEventArgs(Mt5ConnectionState.Connecting, "Connecting to " + host + ":" + port));
-
-            try
+            get
             {
-                mClient.Open(host, port);
-                mClient.Connect();
-            }
-            catch (Exception e)
-            {
-                ConnectionState = Mt5ConnectionState.Failed;
-                ConnectionStateChanged.FireEvent(this
-                    , new Mt5ConnectionEventArgs(Mt5ConnectionState.Failed, "Failed connection to " + host + ":" + port + ". " + e.Message));
-                return;
-            }
-
-            ConnectionState = Mt5ConnectionState.Connected;
-            ConnectionStateChanged.FireEvent(this
-                , new Mt5ConnectionEventArgs(Mt5ConnectionState.Connected, "Connected  to " + host + ":" + port));
-        }
-
-        private void Connect(int port)
-        {
-            ConnectionState = Mt5ConnectionState.Connecting;
-            ConnectionStateChanged.FireEvent(this
-                , new Mt5ConnectionEventArgs(Mt5ConnectionState.Connecting, "Connecting to 'localhost':" + port));
-
-            try
-            {
-                mClient.Open(port);
-                mClient.Connect();
-            }
-            catch (Exception e)
-            {
-                ConnectionState = Mt5ConnectionState.Failed;
-                ConnectionStateChanged.FireEvent(this
-                    , new Mt5ConnectionEventArgs(Mt5ConnectionState.Failed, "Failed connection  to 'localhost':" + port + ". " + e.Message));
-
-                return;
-            }
-
-            ConnectionState = Mt5ConnectionState.Connected;
-            ConnectionStateChanged.FireEvent(this
-                , new Mt5ConnectionEventArgs(Mt5ConnectionState.Connected, "Connected to 'localhost':" + port));
-        }
-
-        private void Disconnect()
-        {
-            mClient.Disconnect();
-            mClient.Close();
-
-            ConnectionState = Mt5ConnectionState.Disconnected;
-            ConnectionStateChanged.FireEvent(this, new Mt5ConnectionEventArgs(Mt5ConnectionState.Disconnected, "Disconnected"));
-        }
-
-        private T sendCommand<T>(Mt5CommandType commandType, ArrayList commandParameters)
-        {
-            var response = mClient.SendCommand((int)commandType, commandParameters);
-
-            if (response is MtResponseDouble)
-                return (T)Convert.ChangeType(((MtResponseDouble)response).Value, typeof(T));
-
-            if (response is MtResponseInt)
-                return (T)Convert.ChangeType(((MtResponseInt)response).Value, typeof(T));
-
-            if (response is MtResponseLong)
-                return (T)Convert.ChangeType(((MtResponseLong)response).Value, typeof(T));
-
-            if (response is MtResponseULong)
-                return (T)Convert.ChangeType(((MtResponseULong)response).Value, typeof(T));
-
-            if (response is MtResponseBool)
-                return (T)Convert.ChangeType(((MtResponseBool)response).Value, typeof(T));
-
-            if (response is MtResponseString)
-                return (T)Convert.ChangeType(((MtResponseString)response).Value, typeof(T));
-
-            if (response is MtResponseDoubleArray)
-                return (T)Convert.ChangeType(((MtResponseDoubleArray)response).Value, typeof(T));
-
-            if (response is MtResponseIntArray)
-                return (T)Convert.ChangeType(((MtResponseIntArray)response).Value, typeof(T));
-
-            if (response is MtResponseLongArray)
-                return (T)Convert.ChangeType(((MtResponseLongArray)response).Value, typeof(T));
-
-            if (response is MtResponseArrayList)
-                return (T)Convert.ChangeType(((MtResponseArrayList)response).Value, typeof(T));
-
-            if (response is MtResponseMqlRatesArray)
-                return (T)Convert.ChangeType(((MtResponseMqlRatesArray)response).Value, typeof(T));
-
-            if (response is MtResponseMqlTick)
-                return (T)Convert.ChangeType(((MtResponseMqlTick)response).Value, typeof(T));
-
-            if (response is MtResponseMqlBookInfoArray)
-                return (T)Convert.ChangeType(((MtResponseMqlBookInfoArray)response).Value, typeof(T));
-
-            return default(T);
-        }
-
-        private void mClient_QuoteUpdated(MtQuote quote)
-        {
-            if (quote != null)
-            {
-                if (QuoteUpdated != null)
+                lock (_locker)
                 {
-                    QuoteUpdated(this, quote.Instrument, quote.Bid, quote.Ask);
+                    return _client;
                 }
             }
         }
 
-        private void mClient_ServerDisconnected(object sender, EventArgs e)
+        private void Connect(MtClient client)
         {
-            ConnectionState = Mt5ConnectionState.Disconnected;
-            ConnectionStateChanged.FireEvent(this
-                , new Mt5ConnectionEventArgs(Mt5ConnectionState.Disconnected, "MtApi is disconnected"));
+            lock (_locker)
+            {
+                if (_connectionState == Mt5ConnectionState.Connected
+                    || _connectionState == Mt5ConnectionState.Connecting)
+                {
+                    return;
+                }
+
+                _connectionState = Mt5ConnectionState.Connecting;
+            }
+
+            string message = string.IsNullOrEmpty(client.Host) ? $"Connecting to localhost:{client.Port}" : $"Connecting to {client.Host}:{client.Port}";
+            ConnectionStateChanged?.Invoke(this, new Mt5ConnectionEventArgs(Mt5ConnectionState.Connecting, message));
+
+            var state = Mt5ConnectionState.Failed;
+
+            lock (_locker)
+            {
+                try
+                {
+                    client.Connect();
+                    state = Mt5ConnectionState.Connected;
+                }
+                catch (Exception e)
+                {
+                    client.Dispose();
+                    message = string.IsNullOrEmpty(client.Host) ? $"Failed connection to localhost:{client.Port}. {e.Message}" : $"Failed connection to {client.Host}:{client.Port}. {e.Message}";
+                }
+
+                if (state == Mt5ConnectionState.Connected)
+                {
+                    _client = client;
+                    _client.QuoteAdded += _client_QuoteAdded;
+                    _client.QuoteRemoved += _client_QuoteRemoved;
+                    _client.QuoteUpdated += _client_QuoteUpdated;
+                    _client.ServerDisconnected += _client_ServerDisconnected;
+                    _client.ServerFailed += _client_ServerFailed;
+                    message = string.IsNullOrEmpty(client.Host) ? $"Connected to localhost:{client.Port}" : $"Connected to  { client.Host}:{client.Port}";
+                }
+
+                _connectionState = state;
+            }
+
+            ConnectionStateChanged?.Invoke(this, new Mt5ConnectionEventArgs(state, message));
+
+            if (state == Mt5ConnectionState.Connected)
+            {
+                OnConnected();
+            }
         }
 
-        private void mClient_ServerFailed(object sender, EventArgs e)
+        private void Connect(string host, int port)
         {
-            ConnectionState = Mt5ConnectionState.Failed;
-            ConnectionStateChanged.FireEvent(this
-                , new Mt5ConnectionEventArgs(Mt5ConnectionState.Failed, "Failed connection with MtApi"));
+            var client = new MtClient(host, port);
+            Connect(client);
         }
 
-        private void mClient_QuoteRemoved(MtQuote quote)
+        private void Connect(int port)
         {
-            QuoteRemoved.FireEvent(this, new Mt5QuoteEventArgs(quote.Parse()));
+            var client = new MtClient(port);
+            Connect(client);
         }
 
-        private void mClient_QuoteAdded(MtQuote quote)
+        private void Disconnect(bool failed)
         {
-            QuoteAdded.FireEvent(this, new Mt5QuoteEventArgs(quote.Parse()));
+            var state = failed ? Mt5ConnectionState.Failed : Mt5ConnectionState.Disconnected;
+            var message = failed ? "Connection Failed" : "Disconnected";
+
+            lock (_locker)
+            {
+                if (_connectionState == Mt5ConnectionState.Disconnected
+                    || _connectionState == Mt5ConnectionState.Failed)
+                    return;
+
+                if (_client != null)
+                {
+                    _client.QuoteAdded -= _client_QuoteAdded;
+                    _client.QuoteRemoved -= _client_QuoteRemoved;
+                    _client.QuoteUpdated -= _client_QuoteUpdated;
+                    _client.ServerDisconnected -= _client_ServerDisconnected;
+                    _client.ServerFailed -= _client_ServerFailed;
+
+                    if (!failed)
+                    {
+                        _client.Disconnect();
+                    }
+
+                    _client.Dispose();
+
+                    _client = null;
+                }
+
+                _connectionState = state;
+            }
+
+            ConnectionStateChanged?.Invoke(this, new Mt5ConnectionEventArgs(state, message));
         }
 
-        #endregion
+        private T SendCommand<T>(Mt5CommandType commandType, ArrayList commandParameters, Dictionary<string, object> namedParams = null)
+        {
+            MtResponse response;
 
-        #region Private Fields
-        private readonly MtClient mClient = new MtClient();
+            var client = Client;
+            if (client == null)
+            {
+                throw new Exception("No connection");
+            }
+
+            try
+            {
+                response = client.SendCommand((int)commandType, commandParameters, namedParams, ExecutorHandle);
+            }
+            catch (CommunicationException ex)
+            {
+                throw new Exception(ex.Message, ex);
+            }
+
+            if (response == null)
+            {
+                throw new ExecutionException(ErrorCode.ErrCustom, "Response from MetaTrader is null");
+            }
+
+            if (response.ErrorCode != 0)
+            {
+                throw new ExecutionException((ErrorCode)response.ErrorCode, response.ToString());
+            }
+
+            var responseValue = response.GetValue();
+            return responseValue != null ? (T)responseValue : default(T);
+        }
+
+        private T SendRequest<T>(RequestBase request) where T : ResponseBase, new()
+        {
+            if (request == null)
+                return default(T);
+
+            var serializer = JsonConvert.SerializeObject(request, Formatting.None,
+                            new JsonSerializerSettings
+                            {
+                                NullValueHandling = NullValueHandling.Ignore
+                            });
+            var commandParameters = new ArrayList { serializer };
+
+            var res = SendCommand<string>(Mt5CommandType.MtRequest, commandParameters);
+
+            if (res == null)
+            {
+                throw new ExecutionException(ErrorCode.ErrCustom, "Response from MetaTrader is null");
+            }
+
+            var response = JsonConvert.DeserializeObject<T>(res);
+            if (response.ErrorCode != 0)
+            {
+                throw new ExecutionException((ErrorCode)response.ErrorCode, response.ErrorMessage);
+            }
+
+            return response;
+        }
+
+
+        private void _client_QuoteUpdated(MtQuote quote)
+        {
+            if (quote != null)
+            {
+                QuoteUpdated?.Invoke(this, quote.Instrument, quote.Bid, quote.Ask);
+            }
+        }
+
+        private void _client_ServerDisconnected(object sender, EventArgs e)
+        {
+            Disconnect(false);
+        }
+
+        private void _client_ServerFailed(object sender, EventArgs e)
+        {
+            Disconnect(true);
+        }
+
+        private void _client_QuoteRemoved(MtQuote quote)
+        {
+            QuoteRemoved?.Invoke(this, new Mt5QuoteEventArgs(quote.Parse()));
+        }
+
+        private void _client_QuoteAdded(MtQuote quote)
+        {
+            QuoteAdded?.Invoke(this, new Mt5QuoteEventArgs(quote.Parse()));
+        }
+
+        private void OnConnected()
+        {
+            // INFO: disabled backtesting mode while solution of window handle in testing mode is not found
+            //_isBacktestingMode = IsTesting();
+
+            if (_isBacktestingMode)
+            {
+                BacktestingReady();
+            }
+        }
+
+        private void BacktestingReady()
+        {
+            SendCommand<object>(Mt5CommandType.BacktestingReady, null);
+        }
         #endregion
     }
 }

@@ -4,7 +4,8 @@
 
 #include "MT4Handler.h"
 #include "Windows.h"
-#include < vcclr.h >
+#include <vcclr.h>
+#include <functional>
 
 using namespace System;
 using namespace MTApiService;
@@ -17,242 +18,250 @@ using namespace System::IO;
 using namespace  System::Collections::Generic;
 using namespace System::Diagnostics;
 
+#define _DLLAPI extern "C" __declspec(dllexport)
+
 void convertSystemString(wchar_t* dest, String^ src)
 {
-	pin_ptr<const wchar_t> wch = PtrToStringChars(src);
-	memcpy(dest, wch, wcslen(wch) * sizeof(wchar_t));
-	dest[wcslen(wch)] = '\0';
+    pin_ptr<const wchar_t> wch = PtrToStringChars(src);
+    memcpy(dest, wch, wcslen(wch) * sizeof(wchar_t));
+    dest[wcslen(wch)] = '\0';
 }
 
-int _stdcall initExpert(int expertHandle, int port, wchar_t* symbol, double bid, double ask, wchar_t* err)
+template <typename T> T Execute(std::function<T()> func, wchar_t* err, T default_value)
 {
-	try
-	{
-		MT4Handler^ mtHandler = gcnew MT4Handler();
-
-		MtServerInstance::GetInstance()->InitExpert(expertHandle, port, gcnew String(symbol), bid, ask, mtHandler);
-	}
-	catch (Exception^ e)
-	{
-		convertSystemString(err, e->Message);
-		Debug::WriteLine("[ERROR] MTConnector:initExpert(): " + e->Message);
-		return 0;
-	}
-	return 1;
-}
-
-int _stdcall deinitExpert(int expertHandle, wchar_t* err)
-{
-	try
-	{
-		MtServerInstance::GetInstance()->DeinitExpert(expertHandle);
-	}	
-	catch (Exception^ e)
-	{
-		convertSystemString(err, e->Message);
-		Debug::WriteLine("[ERROR] MTConnector:deinitExpert(): " + e->Message);
-		return 0;
-	}
-	return 1;
-}
-
-int _stdcall updateQuote(int expertHandle, wchar_t* symbol, double bid, double ask, wchar_t* err)
-{
-	try
-	{
-		MtServerInstance::GetInstance()->SendQuote(expertHandle, gcnew String(symbol), bid, ask);
-	}
-	catch (Exception^ e)
-	{
-		convertSystemString(err, e->Message);
-		Debug::WriteLine("[ERROR] MTConnector:updateQuote(): " + e->Message);
-		return 0;
-	}
-	return 1;
-}
-
-
-int _stdcall sendEvent(int expertHandle, int eventType, wchar_t* payload, wchar_t* err)
-{
+    T result = default_value;
     try
     {
-        MtServerInstance::GetInstance()->SendEvent(expertHandle, eventType, gcnew String(payload));
+        result = func();
     }
     catch (Exception^ e)
     {
         convertSystemString(err, e->Message);
-        Debug::WriteLine("[ERROR] MTConnector:updateTimeBar(): " + e->Message);
-        return 0;
     }
-    return 1;
+    return result;
 }
 
-int _stdcall sendIntResponse(int expertHandle, int response)
+_DLLAPI bool _stdcall initExpert(int expertHandle, int port, wchar_t* symbol, double bid, double ask, wchar_t* err)
 {
-	try
-	{
-		MtServerInstance::GetInstance()->SendResponse(expertHandle, gcnew MtResponseInt(response));
-	}
-	catch (Exception^ e)
-	{
-		Debug::WriteLine("[ERROR] MTConnector:sendIntResponse(): " + e->Message);
-		return 0;
-	}
-	return 1;
+    return Execute<bool>([&expertHandle, &port, symbol, &bid, &ask]() {
+        MT4Handler^ mtHandler = gcnew MT4Handler();
+        MtAdapter::GetInstance()->InitExpert(expertHandle, port, gcnew String(symbol), bid, ask, mtHandler);
+        return true;
+    }, err, false);
+
 }
 
-int _stdcall sendBooleanResponse(int expertHandle, int response)
+_DLLAPI bool _stdcall deinitExpert(int expertHandle, wchar_t* err)
 {
-	try
-	{
-		bool value = (response != 0) ? true : false;
-
-		MtServerInstance::GetInstance()->SendResponse(expertHandle, gcnew MtResponseBool(value));
-	}
-	catch (Exception^ e)
-	{
-		Debug::WriteLine("[ERROR] MTConnector:sendBooleanResponse(): " + e->Message);
-		return 0;
-	}
-	return 1;
+    return Execute<bool>([&expertHandle]() {
+        MtAdapter::GetInstance()->DeinitExpert(expertHandle);
+        return true;
+    }, err, false);
 }
 
-int _stdcall sendDoubleResponse(int expertHandle, double response)
+_DLLAPI bool _stdcall updateQuote(int expertHandle, wchar_t* symbol, double bid, double ask, wchar_t* err)
 {
-	try
-	{
-		MtServerInstance::GetInstance()->SendResponse(expertHandle, gcnew MtResponseDouble(response));
-	}
-	catch (Exception^ e)
-	{
-		Debug::WriteLine("[ERROR] MTConnector:sendDoubleResponse(): " + e->Message);
-		return 0;
-	}
-	return 1;
+    return Execute<bool>([&expertHandle, symbol, &bid, &ask]() {
+        MtAdapter::GetInstance()->SendQuote(expertHandle, gcnew String(symbol), bid, ask);
+        return true;
+    }, err, false);
 }
 
-int _stdcall sendStringResponse(int expertHandle, wchar_t* response)
+
+_DLLAPI bool _stdcall sendEvent(int expertHandle, int eventType, wchar_t* payload, wchar_t* err)
 {
-	try
-	{
-		MtServerInstance::GetInstance()->SendResponse(expertHandle, gcnew MtResponseString(gcnew String(response)));
-	}
-	catch (Exception^ e)
-	{
-		Debug::WriteLine("[ERROR] MTConnector:sendStringResponse(): " + e->Message);
-		return 0;
-	}
-	return 1;
+    return Execute<bool>([&expertHandle, &eventType, payload]() {
+        MtAdapter::GetInstance()->SendEvent(expertHandle, eventType, gcnew String(payload));
+        return true;
+    }, err, false);
 }
 
-int _stdcall sendVoidResponse(int expertHandle)
+_DLLAPI bool _stdcall sendIntResponse(int expertHandle, int response, wchar_t* err)
 {
-	try
-	{		
-		MtServerInstance::GetInstance()->SendResponse(expertHandle, nullptr);
-	}
-	catch (Exception^ e)
-	{
-		Debug::WriteLine("[ERROR] MTConnector:sendVoidResponse(): " + e->Message);
-		return 0;
-	}
-	return 1;
+    return Execute<bool>([&expertHandle, &response]() {
+        MtAdapter::GetInstance()->SendResponse(expertHandle, gcnew MtResponseInt(response));
+        return true;
+    }, err, false);
 }
 
-int _stdcall sendDoubleArrayResponse(int expertHandle, double* values, int size)
+_DLLAPI bool _stdcall sendBooleanResponse(int expertHandle, bool response, wchar_t* err)
 {
-	try
-	{
-		array<double>^ list = gcnew array<double>(size);
-
-		for(int i = 0; i < size; i++)
-		{
-			list[i] = values[i];
-		}
-
-		MtServerInstance::GetInstance()->SendResponse(expertHandle, gcnew MtResponseDoubleArray(list));
-	}
-	catch (Exception^ e)
-	{
-		Debug::WriteLine("[ERROR] MTConnector:sendDoubleArrayResponse(): " + e->Message);
-		return 0;
-	}
-	return 1;
+    return Execute<bool>([&expertHandle, &response]() {
+        MtAdapter::GetInstance()->SendResponse(expertHandle, gcnew MtResponseBool(response));
+        return true;
+    }, err, false);
 }
 
-int _stdcall sendIntArrayResponse(int expertHandle, int* values, int size)
+_DLLAPI bool _stdcall sendDoubleResponse(int expertHandle, double response, wchar_t* err)
 {
-	try
-	{
-		array<int>^ list = gcnew array<int>(size);
-
-		for(int i = 0; i < size; i++)
-		{
-			list[i] = values[i];
-		}
-
-		MtServerInstance::GetInstance()->SendResponse(expertHandle, gcnew MtResponseIntArray(list));
-	}
-	catch (Exception^ e)
-	{
-		Debug::WriteLine("[ERROR] MTConnector:sendIntArrayResponse(): " + e->Message);
-		return 0;
-	}
-	return 1;
+    return Execute<bool>([&expertHandle, &response]() {
+        MtAdapter::GetInstance()->SendResponse(expertHandle, gcnew MtResponseDouble(response));
+        return true;
+    }, err, false);
 }
 
-int _stdcall getCommandType(int expertHandle, int* res)
+_DLLAPI bool _stdcall sendStringResponse(int expertHandle, wchar_t* response, wchar_t* err)
 {
-	try
-	{
-		*res = MtServerInstance::GetInstance()->GetCommandType(expertHandle);
-	}
-	catch (Exception^ e)
-	{
-		Debug::WriteLine("[ERROR] MTConnector:getCommandType(): " + e->Message);
-		return 0;
-	}
-	return 1;
+    return Execute<bool>([&expertHandle, response]() {
+        MtAdapter::GetInstance()->SendResponse(expertHandle, gcnew MtResponseString(gcnew String(response)));
+        return true;
+    }, err, false);
 }
 
-int _stdcall getIntValue(int expertHandle, int paramIndex, int* res)
+_DLLAPI bool _stdcall sendErrorResponse(int expertHandle, int code, wchar_t* message, wchar_t* err)
 {
-	try
-	{
-		*res = (int)MtServerInstance::GetInstance()->GetCommandParameter(expertHandle, paramIndex);
-	}
-	catch (Exception^ e)
-	{
-		Debug::WriteLine("[ERROR] MTConnector:getIntValue(): " + e->Message);
-		return 0;
-	}
-	return 1;
+    return Execute<bool>([&expertHandle, &code, message]() {
+        MtResponseString^ res = gcnew MtResponseString(gcnew String(message));
+        res->ErrorCode = code;
+        MtAdapter::GetInstance()->SendResponse(expertHandle, res);
+        return true;
+    }, err, false);
 }
 
-int _stdcall getDoubleValue(int expertHandle, int paramIndex, double* res)
+_DLLAPI bool _stdcall sendVoidResponse(int expertHandle, wchar_t* err)
 {
-	try
-	{
-		*res = (double)MtServerInstance::GetInstance()->GetCommandParameter(expertHandle, paramIndex);
-	}
-	catch (Exception^ e)
-	{
-		Debug::WriteLine("[ERROR] MTConnector:getDoubleValue(): " + e->Message);
-		return 0;
-	}
-	return 1;
+    return Execute<bool>([&expertHandle]() {
+        MtAdapter::GetInstance()->SendResponse(expertHandle, gcnew MtResponseObject(nullptr));
+        return true;
+    }, err, false);
 }
 
-int _stdcall getStringValue(int expertHandle, int paramIndex, wchar_t* res)
+_DLLAPI bool _stdcall sendDoubleArrayResponse(int expertHandle, double* values, int size, wchar_t* err)
 {
-	try
-	{
-		convertSystemString(res, (String^)MtServerInstance::GetInstance()->GetCommandParameter(expertHandle, paramIndex));
-	}
-	catch (Exception^ e)
-	{
-		Debug::WriteLine("[ERROR] MTConnector:getStringValue(): " + e->Message);
-		return 0;
-	}
-	return 1;
+    return Execute<bool>([&expertHandle, values, &size]() {
+        array<double>^ list = gcnew array<double>(size);
+        for (int i = 0; i < size; i++)
+        {
+            list[i] = values[i];
+        }
+        MtAdapter::GetInstance()->SendResponse(expertHandle, gcnew MtResponseDoubleArray(list));
+        return true;
+    }, err, false);
+}
+
+_DLLAPI bool _stdcall sendIntArrayResponse(int expertHandle, int* values, int size, wchar_t* err)
+{
+    return Execute<bool>([&expertHandle, values, &size]() {
+        array<int>^ list = gcnew array<int>(size);
+        for (int i = 0; i < size; i++)
+        {
+            list[i] = values[i];
+        }
+        MtAdapter::GetInstance()->SendResponse(expertHandle, gcnew MtResponseIntArray(list));
+        return true;
+    }, err, false);
+}
+
+_DLLAPI bool _stdcall sendLongResponse(int expertHandle, __int64 response, wchar_t* err)
+{
+    return Execute<bool>([&expertHandle, &response]() {
+        MtAdapter::GetInstance()->SendResponse(expertHandle, gcnew MtResponseLong(response));
+        return true;
+    }, err, false);
+}
+
+_DLLAPI bool _stdcall getCommandType(int expertHandle, int* res, wchar_t* err)
+{
+    return Execute<bool>([&expertHandle, res]() {
+        *res = MtAdapter::GetInstance()->GetCommandType(expertHandle);
+        return true;
+    }, err, false);
+}
+
+_DLLAPI bool _stdcall getIntValue(int expertHandle, int paramIndex, int* res, wchar_t* err)
+{
+    return Execute<bool>([&expertHandle, &paramIndex, res]() {
+        *res = (int)MtAdapter::GetInstance()->GetCommandParameter(expertHandle, paramIndex);
+        return true;
+    }, err, false);
+}
+
+// --- index parameters
+
+_DLLAPI bool _stdcall getDoubleValue(int expertHandle, int paramIndex, double* res, wchar_t* err)
+{
+    return Execute<bool>([&expertHandle, &paramIndex, res]() {
+        *res = (double)MtAdapter::GetInstance()->GetCommandParameter(expertHandle, paramIndex);
+        return true;
+    }, err, false);
+}
+
+_DLLAPI bool _stdcall getStringValue(int expertHandle, int paramIndex, wchar_t* res, wchar_t* err)
+{
+    return Execute<bool>([&expertHandle, &paramIndex, res]() {
+        convertSystemString(res, (String^)MtAdapter::GetInstance()->GetCommandParameter(expertHandle, paramIndex));
+        return true;
+    }, err, false);
+}
+
+_DLLAPI bool _stdcall getBooleanValue(int expertHandle, int paramIndex, int* res, wchar_t* err)
+{
+    return Execute<bool>([&expertHandle, &paramIndex, res]() {
+        *res = (bool)MtAdapter::GetInstance()->GetCommandParameter(expertHandle, paramIndex);
+        return true;
+    }, err, false);
+}
+
+_DLLAPI bool _stdcall getLongValue(int expertHandle, int paramIndex, __int64* res, wchar_t* err)
+{
+    return Execute<bool>([&expertHandle, &paramIndex, res]() {
+        *res = (__int64)MtAdapter::GetInstance()->GetCommandParameter(expertHandle, paramIndex);
+        return true;
+    }, err, false);
+}
+
+// --- named parameters
+
+_DLLAPI bool _stdcall containsNamedValue(int expertHandle, wchar_t* paramName)
+{
+    wchar_t err[1000];
+    return Execute<bool>([&expertHandle, paramName]() {
+        return MtAdapter::GetInstance()->ContainsNamedParameter(expertHandle, gcnew String(paramName));
+    }, err, false);
+}
+
+_DLLAPI bool _stdcall getNamedIntValue(int expertHandle, wchar_t* paramName, int* res, wchar_t* err)
+{
+    return Execute<bool>([&expertHandle, paramName, res]() {
+        System::Object^ obj = MtAdapter::GetInstance()->GetNamedParameter(expertHandle, gcnew String(paramName));
+        *res = (int)obj;
+        return true;
+    }, err, false);
+}
+
+_DLLAPI bool _stdcall getNamedDoubleValue(int expertHandle, wchar_t* paramName, double* res, wchar_t* err)
+{
+    return Execute<bool>([&expertHandle, paramName, res]() {
+        System::Object^ obj = MtAdapter::GetInstance()->GetNamedParameter(expertHandle, gcnew String(paramName));
+        *res = (double)obj;
+        return true;
+    }, err, false);
+}
+
+_DLLAPI bool _stdcall getNamedStringValue(int expertHandle, wchar_t* paramName, wchar_t* res, wchar_t* err)
+{
+    return Execute<bool>([&expertHandle, paramName, res]() {
+        System::Object^ obj = MtAdapter::GetInstance()->GetNamedParameter(expertHandle, gcnew String(paramName));
+        convertSystemString(res, (String^)obj);
+        return true;
+    }, err, false);
+}
+
+_DLLAPI bool _stdcall getNamedBooleanValue(int expertHandle, wchar_t* paramName, int* res, wchar_t* err)
+{
+    return Execute<bool>([&expertHandle, paramName, res]() {
+        System::Object^ obj = MtAdapter::GetInstance()->GetNamedParameter(expertHandle, gcnew String(paramName));
+        *res = (bool)obj;
+        return true;
+    }, err, false);
+}
+
+_DLLAPI bool _stdcall getNamedLongValue(int expertHandle, wchar_t* paramName, __int64* res, wchar_t* err)
+{
+    return Execute<bool>([&expertHandle, paramName, res]() {
+        System::Object^ obj = MtAdapter::GetInstance()->GetNamedParameter(expertHandle, gcnew String(paramName));
+        if (obj != nullptr)
+            *res = (__int64)obj;
+        return true;
+    }, err, false);
 }

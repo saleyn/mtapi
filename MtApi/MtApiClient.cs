@@ -8,6 +8,7 @@ using System.ServiceModel;
 using MtApi.Requests;
 using MtApi.Responses;
 using Newtonsoft.Json;
+using System.Threading.Tasks;
 
 namespace MtApi
 {
@@ -15,26 +16,28 @@ namespace MtApi
 
     public sealed class MtApiClient
     {
-        private const int DoubleArrayLimit = 64800;
-        private volatile bool IsBacktestingMode = false;
-
         #region MetaTrader Constants
 
         //Special constant
         public const int NULL = 0;
         public const int EMPTY = -1;
+
+        private const string LogProfileName = "MtApiClient";
+        #endregion
+
+        #region Private Fields
+        private MtClient _client;
+        private readonly object _locker = new object();
+        private MtConnectionState _connectionState = MtConnectionState.Disconnected;
+        private volatile bool _isBacktestingMode;
+        private int _executorHandle;
         #endregion
 
         #region ctor
 
         public MtApiClient()
         {
-            _client.QuoteAdded += mClient_QuoteAdded;
-            _client.QuoteRemoved += mClient_QuoteRemoved;
-            _client.QuoteUpdated += mClient_QuoteUpdated;
-            _client.ServerDisconnected += mClient_ServerDisconnected;
-            _client.ServerFailed += mClient_ServerFailed;
-            _client.MtEventReceived += _client_MtEventReceived;
+            LogConfigurator.Setup(LogProfileName);
         }
         #endregion
 
@@ -46,15 +49,7 @@ namespace MtApi
         ///<param name="port">Port of host connection (default 8222) </param>
         public void BeginConnect(string host, int port)
         {
-            //if (string.IsNullOrEmpty(host) == false && (host.Equals("localhost") || host.Equals("127.0.0.1")))
-            //{
-            //    this.BeginConnect(port);
-            //}
-            //else
-            //{
-            Action<string, int> connectAction = Connect;
-            connectAction.BeginInvoke(host, port, null, null);
-            //}
+            Task.Factory.StartNew(() => Connect(host, port));
         }
 
         ///<summary>
@@ -63,8 +58,7 @@ namespace MtApi
         ///<param name="port">Port of host connection (default 8222) </param>
         public void BeginConnect(int port)
         {
-            Action<int> connectAction = Connect;
-            connectAction.BeginInvoke(port, null, null);
+            Task.Factory.StartNew(() => Connect(port));
         }
 
         ///<summary>
@@ -72,21 +66,21 @@ namespace MtApi
         ///</summary>
         public void BeginDisconnect()
         {
-            Action disconnectAction = Disconnect;
-            disconnectAction.BeginInvoke(null, null);
+            Task.Factory.StartNew(() => Disconnect(false));
         }
 
         ///<summary>
         ///Load quotes connected into MetaTrader API.
         ///</summary>
-        public IEnumerable<MtQuote> GetQuotes()
+        public List<MtQuote> GetQuotes()
         {
-            var quotes = _client.GetQuotes();
-            return quotes != null ? (from q in quotes select q.Convert()) : null;
+            var client = Client;
+            var quotes = client != null ? client.GetQuotes() : null;
+            return quotes?.Select(q => new MtQuote(q)).ToList();
         }
         #endregion
 
-        #region Properties        
+        #region Properties
 
         ///<summary>
         ///Connection status of MetaTrader API.
@@ -98,6 +92,27 @@ namespace MtApi
                 lock (_locker)
                 {
                     return _connectionState;
+                }
+            }
+        }
+
+        ///<summary>
+        ///Handle of expert used to execute commands
+        ///</summary>
+        public int ExecutorHandle
+        {
+            get
+            {
+                lock (_locker)
+                {
+                    return _executorHandle;
+                }
+            }
+            set
+            {
+                lock (_locker)
+                {
+                    _executorHandle = value;
                 }
             }
         }
@@ -174,7 +189,7 @@ namespace MtApi
         public double OrderOpenPrice(int ticket)
         {
             var commandParameters = new ArrayList { ticket };
-            double retVal = SendCommand<double>(MtCommandType.OrderOpenPriceByTicket, commandParameters);
+            var retVal = SendCommand<double>(MtCommandType.OrderOpenPriceByTicket, commandParameters);
 
             return retVal;
         }
@@ -219,7 +234,7 @@ namespace MtApi
         [Obsolete("OrderType is deprecated, please use GetOrder instead.")]
         public TradeOperation OrderType()
         {
-            int retVal = SendCommand<int>(MtCommandType.OrderType, null);
+            var retVal = SendCommand<int>(MtCommandType.OrderType, null);
 
             return (TradeOperation)retVal;
         }
@@ -250,7 +265,7 @@ namespace MtApi
                 Expiration = MtApiTimeConverter.ConvertToMtTime(expiration),
                 ArrowColor = MtApiColorConverter.ConvertToMtColor(arrowColor)
             });
-            return response != null ? response.Ticket : -1;
+            return response?.Ticket ?? -1;
         }
 
         public int OrderSend(string symbol, TradeOperation cmd, double volume, double price, int slippage, double stoploss, double takeprofit
@@ -278,7 +293,7 @@ namespace MtApi
 
         public int OrderSend(string symbol, TradeOperation cmd, double volume, string price, int slippage, double stoploss, double takeprofit)
         {
-            double dPrice = 0;
+            double dPrice;
             return double.TryParse(price, out dPrice) ? 
                 OrderSend(symbol, cmd, volume, dPrice, slippage, stoploss, takeprofit, null, 0, DateTime.MinValue, Color.Empty) : 0;
         }
@@ -316,7 +331,7 @@ namespace MtApi
                 Comment = comment,
                 Magic = magic,
             });
-            return response != null ? response.Ticket : -1;
+            return response?.Ticket ?? -1;
         }
 
         public int OrderSendSell(string symbol, double volume, int slippage, double stoploss, double takeprofit, string comment, int magic)
@@ -332,7 +347,7 @@ namespace MtApi
                 Comment = comment,
                 Magic = magic,
             });
-            return response != null ? response.Ticket : -1;
+            return response?.Ticket ?? -1;
         }
 
         public bool OrderClose(int ticket, double lots, double price, int slippage, Color color)
@@ -421,7 +436,7 @@ namespace MtApi
             return response != null;
         }
 
-        public bool OrderModify(int ticket, double price, double stoploss, double takeprofit, DateTime expiration, Color arrow_color)
+        public bool OrderModify(int ticket, double price, double stoploss, double takeprofit, DateTime expiration, Color arrowColor)
         {
             var response = SendRequest<ResponseBase>(new OrderModifyRequest
             {
@@ -430,7 +445,7 @@ namespace MtApi
                 Stoploss = stoploss,
                 Takeprofit = takeprofit,
                 Expiration = MtApiTimeConverter.ConvertToMtTime(expiration),
-                ArrowColor = MtApiColorConverter.ConvertToMtColor(arrow_color)
+                ArrowColor = MtApiColorConverter.ConvertToMtColor(arrowColor)
             });
             return response != null;
         }
@@ -482,7 +497,7 @@ namespace MtApi
         public MtOrder GetOrder(int index, OrderSelectMode select, OrderSelectSource pool)
         {
             var response = SendRequest<GetOrderResponse>(new GetOrderRequest { Index = index, Select = (int) select, Pool = (int) pool});
-            return response != null ? response.Order : null;
+            return response?.Order;
         }
 
         public List<MtOrder> GetOrders(OrderSelectSource pool)
@@ -492,83 +507,241 @@ namespace MtApi
         }
         #endregion
 
-        #region Check Status
+        #region Checkup
 
+        ///<summary>
+        ///Returns the contents of the system variable _LastError.
+        ///After the function call, the contents of _LastError are reset.
+        ///</summary>
+        ///<returns>
+        ///Returns the value of the last error that occurred during the execution of an mql4 program.
+        ///</returns>
         public int GetLastError()
         {
             return SendCommand<int>(MtCommandType.GetLastError, null);
         }
 
+        ///<summary>
+        ///Checks connection between client terminal and server.
+        ///</summary>
+        ///<returns>
+        ///It returns true if connection to the server was successfully established, otherwise, it returns false.
+        ///</returns>
         public bool IsConnected()
         {
             return SendCommand<bool>(MtCommandType.IsConnected, null);
         }
 
+        ///<summary>
+        ///Checks if the Expert Advisor runs on a demo account.
+        ///</summary>
+        ///<returns>
+        ///Returns true if the Expert Advisor runs on a demo account, otherwise returns false.
+        ///</returns>
         public bool IsDemo()
         {
             return SendCommand<bool>(MtCommandType.IsDemo, null);
         }
 
+        ///<summary>
+        ///Checks if the DLL function call is allowed for the Expert Advisor.
+        ///</summary>
+        ///<returns>
+        ///Returns true if the DLL function call is allowed for the Expert Advisor, otherwise returns false.
+        ///</returns>
         public bool IsDllsAllowed()
         {
             return SendCommand<bool>(MtCommandType.IsDllsAllowed, null);
         }
 
+        ///<summary>
+        ///Checks if Expert Advisors are enabled for running.
+        ///</summary>
+        ///<returns>
+        ///Returns true if Expert Advisors are enabled for running, otherwise returns false.
+        ///</returns>
         public bool IsExpertEnabled()
         {
             return SendCommand<bool>(MtCommandType.IsExpertEnabled, null);
         }
 
+        ///<summary>
+        ///Checks if the Expert Advisor can call library function.
+        ///</summary>
+        ///<returns>
+        ///Returns true if the Expert Advisor can call library function, otherwise returns false.
+        ///</returns>
         public bool IsLibrariesAllowed()
         {
             return SendCommand<bool>(MtCommandType.IsLibrariesAllowed, null);
         }
 
+        ///<summary>
+        ///Checks if Expert Advisor runs in the Strategy Tester optimization mode.
+        ///</summary>
+        ///<returns>
+        ///Returns true if Expert Advisor runs in the Strategy Tester optimization mode, otherwise returns false.
+        ///</returns>
         public bool IsOptimization()
         {
             return SendCommand<bool>(MtCommandType.IsOptimization, null);
         }
 
+        ///<summary>
+        ///Checks the forced shutdown of an mql4 program.
+        ///</summary>
+        ///<returns>
+        ///Returns true, if the _StopFlag system variable contains a value other than 0. 
+        ///A nonzero value is written into _StopFlag, if a mql4 program has been commanded to complete its operation. 
+        ///In this case, you must immediately terminate the program, otherwise the program will be completed 
+        ///forcibly from the outside after 3 seconds.
+        ///</returns>
         public bool IsStopped()
         {
             return SendCommand<bool>(MtCommandType.IsStopped, null);
         }
 
+        ///<summary>
+        ///Checks if the Expert Advisor runs in the testing mode.
+        ///</summary>
+        ///<returns>
+        ///Returns true if the Expert Advisor runs in the testing mode, otherwise returns false.
+        ///</returns>
         public bool IsTesting()
         {
             return SendCommand<bool>(MtCommandType.IsTesting, null);
         }
 
+        ///<summary>
+        ///Checks if the Expert Advisor is allowed to trade and trading context is not busy.
+        ///</summary>
+        ///<returns>
+        ///Returns true if the Expert Advisor is allowed to trade and trading context is not busy, otherwise returns false.
+        ///</returns>
         public bool IsTradeAllowed()
         {
             return SendCommand<bool>(MtCommandType.IsTradeAllowed, null);
         }
 
+        ///<summary>
+        ///Returns the information about trade context.
+        ///</summary>
+        ///<returns>
+        ///Returns true if a thread for trading is occupied by another Expert Advisor, otherwise returns false.
+        ///</returns>
         public bool IsTradeContextBusy()
         {
             return SendCommand<bool>(MtCommandType.IsTradeContextBusy, null);
         }
 
+        ///<summary>
+        ///Checks if the Expert Advisor is tested in visual mode.
+        ///</summary>
+        ///<returns>
+        ///Returns true if the Expert Advisor is tested with checked "Visual Mode" button, otherwise returns false.
+        ///</returns>
         public bool IsVisualMode()
         {
             return SendCommand<bool>(MtCommandType.IsVisualMode, null);
         }
 
+        ///<summary>
+        ///Returns the code of a reason for deinitialization.
+        ///</summary>
+        ///<returns>
+        ///Returns the value of _UninitReason which is formed before OnDeinit() is called. 
+        ///Value depends on the reasons that led to deinitialization.
+        ///</returns>
         public int UninitializeReason()
         {
             return SendCommand<int>(MtCommandType.UninitializeReason, null);
         }
 
+        ///<summary>
+        ///Print the error description.
+        ///</summary>
         public string ErrorDescription(int errorCode)
         {
             var commandParameters = new ArrayList { errorCode };
             return SendCommand<string>(MtCommandType.ErrorDescription, commandParameters);
         }
 
+        ///<summary>
+        ///Returns the value of a corresponding property of the mql4 program environment. 
+        ///</summary>
+        ///<param name="propertyId">Identifier of a property. Can be one of the values of the ENUM_TERMINAL_INFO_STRING enumeration.</param>
+        ///<returns>
+        ///Value of string type.
+        ///</returns>
+        public string TerminalInfoString(ENUM_TERMINAL_INFO_STRING propertyId)
+        {
+            var commandParameters = new ArrayList { (int)propertyId };
+            return SendCommand<string>(MtCommandType.TerminalInfoString, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the value of a corresponding property of the mql4 program environment.
+        ///</summary>
+        ///<param name="propertyId">Identifier of a property. Can be one of the values of the ENUM_TERMINAL_INFO_INTEGER enumeration.</param>
+        ///<returns>
+        ///Value of int type.
+        ///</returns>
+        public int TerminalInfoInteger(EnumTerminalInfoInteger propertyId)
+        {
+            var commandParameters = new ArrayList { (int)propertyId };
+            return SendCommand<int>(MtCommandType.TerminalInfoInteger, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the value of a corresponding property of the mql4 program environment.
+        ///</summary>
+        ///<param name="propertyId">Identifier of a property. Can be one of the values of the ENUM_TERMINAL_INFO_DOUBLE enumeration.</param>
+        ///<returns>
+        ///Value of double type.
+        ///</returns>
+        public double TerminalInfoDouble(EnumTerminalInfoDouble propertyId)
+        {
+            var commandParameters = new ArrayList { (int)propertyId };
+            return SendCommand<double>(MtCommandType.TerminalInfoDouble, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the name of company owning the client terminal.
+        ///</summary>
+        ///<returns>
+        ///The name of company owning the client terminal.
+        ///</returns>
+        public string TerminalCompany()
+        {
+            return SendCommand<string>(MtCommandType.TerminalCompany, null);
+        }
+
+        ///<summary>
+        ///Returns client terminal name.
+        ///</summary>
+        ///<returns>
+        ///Client terminal name.
+        ///</returns>
+        public string TerminalName()
+        {
+            return SendCommand<string>(MtCommandType.TerminalName, null);
+        }
+
+        ///<summary>
+        ///Returns the directory, from which the client terminal was launched.
+        ///</summary>
+        ///<returns>
+        ///The directory, from which the client terminal was launched.
+        ///</returns>
+        public string TerminalPath()
+        {
+            return SendCommand<string>(MtCommandType.TerminalPath, null);
+        }
+
         #endregion
 
         #region Account Information
-        
+
         public double AccountBalance()
         {
             return SendCommand<double>(MtCommandType.AccountBalance, null);
@@ -671,12 +844,6 @@ namespace MtApi
             return SendCommand<int>(MtCommandType.GetTickCount, null);
         }
 
-        public double MarketInfo(string symbol, MarketInfoModeType type)
-        {
-            var commandParameters = new ArrayList { symbol, (int)type };
-            return SendCommand<double>(MtCommandType.MarketInfo, commandParameters);
-        }
-
         public int MessageBox(string text, string caption, int flag)
         {
             var commandParameters = new ArrayList { text, caption, flag };
@@ -694,10 +861,10 @@ namespace MtApi
             return SendCommand<int>(MtCommandType.MessageBox, commandParameters);
         }
 
-        public void PlaySound(string filename)
+        public bool PlaySound(string filename)
         {
             var commandParameters = new ArrayList { filename };
-            SendCommand<object>(MtCommandType.PlaySound, commandParameters);
+            return SendCommand<bool>(MtCommandType.PlaySound, commandParameters);
         }
 
         public void Print(string msg)
@@ -712,41 +879,22 @@ namespace MtApi
             return SendCommand<bool>(MtCommandType.SendFTP, commandParameters);
         }
 
-        public bool SendFTP(string filename, string ftp_path)
+        public bool SendFTP(string filename, string ftpPath)
         {
-            var commandParameters = new ArrayList { filename, ftp_path };
+            var commandParameters = new ArrayList { filename, ftpPath };
             return SendCommand<bool>(MtCommandType.SendFTPA, commandParameters);
         }
 
-        public void SendMail(string subject, string some_text)
+        public bool SendMail(string subject, string someText)
         {
-            var commandParameters = new ArrayList { subject, some_text };
-            SendCommand<object>(MtCommandType.SendMail, commandParameters);
+            var commandParameters = new ArrayList { subject, someText };
+            return SendCommand<bool>(MtCommandType.SendMail, commandParameters);
         }
 
         public void Sleep(int milliseconds)
         {
             var commandParameters = new ArrayList { milliseconds };
             SendCommand<object>(MtCommandType.Sleep, commandParameters);
-        }
-
-        #endregion
-
-        #region Client Terminal Functions
-
-        public string TerminalCompany()
-        {
-            return SendCommand<string>(MtCommandType.TerminalCompany, null);
-        }
-
-        public string TerminalName()
-        {
-            return SendCommand<string>(MtCommandType.TerminalName, null);
-        }
-
-        public string TerminalPath()
-        {
-            return SendCommand<string>(MtCommandType.TerminalPath, null);
         }
 
         #endregion
@@ -888,15 +1036,15 @@ namespace MtApi
             return MtApiTimeConverter.ConvertFromMtTime(commandResponse);
         }
 
-        public bool GlobalVariableSetOnCondition(string name, double value, double check_value)
+        public bool GlobalVariableSetOnCondition(string name, double value, double checkValue)
         {
-            var commandParameters = new ArrayList { name, value, check_value };
+            var commandParameters = new ArrayList { name, value, checkValue };
             return SendCommand<bool>(MtCommandType.GlobalVariableSetOnCondition, commandParameters);
         }
 
-        public int GlobalVariablesDeleteAll(string prefix_name)
+        public int GlobalVariablesDeleteAll(string prefixName)
         {
-            var commandParameters = new ArrayList { prefix_name };
+            var commandParameters = new ArrayList { prefixName };
             return SendCommand<int>(MtCommandType.GlobalVariableSetOnCondition, commandParameters);
         }
 
@@ -920,15 +1068,15 @@ namespace MtApi
             return SendCommand<double>(MtCommandType.iAD, commandParameters);
         }
 
-        public double iAlligator(string symbol, int timeframe, int jaw_period, int jaw_shift, int teeth_period, int teeth_shift, int lips_period, int lips_shift, int ma_method, int applied_price, int mode, int shift)
+        public double iAlligator(string symbol, int timeframe, int jawPeriod, int jawShift, int teethPeriod, int teethShift, int lipsPeriod, int lipsShift, int maMethod, int appliedPrice, int mode, int shift)
         {
-            var commandParameters = new ArrayList { symbol, timeframe, jaw_period, jaw_shift, teeth_period, teeth_shift, lips_period, lips_shift, ma_method, applied_price, mode, shift };
+            var commandParameters = new ArrayList { symbol, timeframe, jawPeriod, jawShift, teethPeriod, teethShift, lipsPeriod, lipsShift, maMethod, appliedPrice, mode, shift };
             return SendCommand<double>(MtCommandType.iAlligator, commandParameters);
         }
 
-        public double iADX(string symbol, int timeframe, int period, int applied_price, int mode, int shift)
+        public double iADX(string symbol, int timeframe, int period, int appliedPrice, int mode, int shift)
         {
-            var commandParameters = new ArrayList { symbol, timeframe, period, applied_price, mode, shift };
+            var commandParameters = new ArrayList { symbol, timeframe, period, appliedPrice, mode, shift };
             return SendCommand<double>(MtCommandType.iADX, commandParameters);
         }
 
@@ -944,50 +1092,50 @@ namespace MtApi
             return SendCommand<double>(MtCommandType.iAO, commandParameters);
         }
 
-        public double iBearsPower(string symbol, int timeframe, int period, int applied_price, int shift)
+        public double iBearsPower(string symbol, int timeframe, int period, int appliedPrice, int shift)
         {
-            var commandParameters = new ArrayList { symbol, timeframe, period, applied_price, shift };
+            var commandParameters = new ArrayList { symbol, timeframe, period, appliedPrice, shift };
             return SendCommand<double>(MtCommandType.iBearsPower, commandParameters);
         }
 
-        public double iBands(string symbol, int timeframe, int period, int deviation, int bands_shift, int applied_price, int mode, int shift)
+        public double iBands(string symbol, int timeframe, int period, int deviation, int bandsShift, int appliedPrice, int mode, int shift)
         {
-            var commandParameters = new ArrayList { symbol, timeframe, period, deviation, bands_shift, applied_price, mode, shift };
+            var commandParameters = new ArrayList { symbol, timeframe, period, deviation, bandsShift, appliedPrice, mode, shift };
             return SendCommand<double>(MtCommandType.iBands, commandParameters);
         }
 
-        public double iBandsOnArray(double[] array, int total, int period, int deviation, int bands_shift, int mode, int shift)
+        public double iBandsOnArray(double[] array, int total, int period, int deviation, int bandsShift, int mode, int shift)
         {
-            int arraySize = array != null ? array.Length : 0;
+            var arraySize = array?.Length ?? 0;
             var commandParameters = new ArrayList { arraySize };
-            commandParameters.AddRange(array);
+            commandParameters.AddRange(array ?? new double[] {});
             commandParameters.Add(total);
             commandParameters.Add(period);
             commandParameters.Add(deviation);
-            commandParameters.Add(bands_shift);
+            commandParameters.Add(bandsShift);
             commandParameters.Add(mode);
             commandParameters.Add(shift);
 
             return SendCommand<double>(MtCommandType.iBandsOnArray, commandParameters);
         }
 
-        public double iBullsPower(string symbol, int timeframe, int period, int applied_price, int shift)
+        public double iBullsPower(string symbol, int timeframe, int period, int appliedPrice, int shift)
         {
-            var commandParameters = new ArrayList { symbol, timeframe, period, applied_price, shift };
+            var commandParameters = new ArrayList { symbol, timeframe, period, appliedPrice, shift };
             return SendCommand<double>(MtCommandType.iBullsPower, commandParameters);
         }
 
-        public double iCCI(string symbol, int timeframe, int period, int applied_price, int shift)
+        public double iCCI(string symbol, int timeframe, int period, int appliedPrice, int shift)
         {
-            var commandParameters = new ArrayList { symbol, timeframe, period, applied_price, shift };
+            var commandParameters = new ArrayList { symbol, timeframe, period, appliedPrice, shift };
             return SendCommand<double>(MtCommandType.iCCI, commandParameters);
         }
 
         public double iCCIOnArray(double[] array, int total, int period, int shift)
         {
-            int arraySize = array != null ? array.Length : 0;
+            var arraySize = array?.Length ?? 0;
             var commandParameters = new ArrayList { arraySize };
-            commandParameters.AddRange(array);
+            commandParameters.AddRange(array ?? new double[] { });
             commandParameters.Add(total);
             commandParameters.Add(period);
             commandParameters.Add(shift);
@@ -1007,7 +1155,7 @@ namespace MtApi
                 Params = new ArrayList(parameters),
                 ParamsType = ICustomRequest.ParametersType.Int
             });
-            return response != null ? response.Value : double.NaN;
+            return response?.Value ?? double.NaN;
         }
 
         public double iCustom(string symbol, int timeframe, string name, double[] parameters, int mode, int shift)
@@ -1022,7 +1170,7 @@ namespace MtApi
                 Params = new ArrayList(parameters),
                 ParamsType = ICustomRequest.ParametersType.Double
             });
-            return response != null ? response.Value : double.NaN;
+            return response?.Value ?? double.NaN;
         }
 
         public double iCustom(string symbol, int timeframe, string name, int mode, int shift)
@@ -1035,7 +1183,7 @@ namespace MtApi
                 Mode = mode,
                 Shift = shift
             });
-            return response != null ? response.Value : double.NaN;
+            return response?.Value ?? double.NaN;
         }
 
         public double iDeMarker(string symbol, int timeframe, int period, int shift)
@@ -1044,21 +1192,21 @@ namespace MtApi
             return SendCommand<double>(MtCommandType.iDeMarker, commandParameters);
         }
 
-        public double iEnvelopes(string symbol, int timeframe, int ma_period, int ma_method, int ma_shift, int applied_price, double deviation, int mode, int shift)
+        public double iEnvelopes(string symbol, int timeframe, int maPeriod, int maMethod, int maShift, int appliedPrice, double deviation, int mode, int shift)
         {
-            var commandParameters = new ArrayList { symbol, timeframe, ma_period, ma_method, ma_shift, applied_price, deviation, mode, shift };
+            var commandParameters = new ArrayList { symbol, timeframe, maPeriod, maMethod, maShift, appliedPrice, deviation, mode, shift };
             return SendCommand<double>(MtCommandType.iEnvelopes, commandParameters);
         }
 
-        public double iEnvelopesOnArray(double[] array, int total, int ma_period, int ma_method, int ma_shift, double deviation, int mode, int shift)
+        public double iEnvelopesOnArray(double[] array, int total, int maPeriod, int maMethod, int maShift, double deviation, int mode, int shift)
         {
-            int arraySize = array != null ? array.Length : 0;
+            var arraySize = array?.Length ?? 0;
             var commandParameters = new ArrayList { arraySize };
-            commandParameters.AddRange(array);
+            commandParameters.AddRange(array ?? new double[] {});
             commandParameters.Add(total);
-            commandParameters.Add(ma_period);
-            commandParameters.Add(ma_method);
-            commandParameters.Add(ma_shift);
+            commandParameters.Add(maPeriod);
+            commandParameters.Add(maMethod);
+            commandParameters.Add(maShift);
             commandParameters.Add(deviation);
             commandParameters.Add(mode);
             commandParameters.Add(shift);
@@ -1066,9 +1214,9 @@ namespace MtApi
             return SendCommand<double>(MtCommandType.iEnvelopesOnArray, commandParameters);
         }
 
-        public double iForce(string symbol, int timeframe, int period, int ma_method, int applied_price, int shift)
+        public double iForce(string symbol, int timeframe, int period, int maMethod, int appliedPrice, int shift)
         {
-            var commandParameters = new ArrayList { symbol, timeframe, period, ma_method, applied_price, shift };
+            var commandParameters = new ArrayList { symbol, timeframe, period, maMethod, appliedPrice, shift };
             return SendCommand<double>(MtCommandType.iForce, commandParameters);
         }
 
@@ -1078,15 +1226,15 @@ namespace MtApi
             return SendCommand<double>(MtCommandType.iFractals, commandParameters);
         }
 
-        public double iGator(string symbol, int timeframe, int jaw_period, int jaw_shift, int teeth_period, int teeth_shift, int lips_period, int lips_shift, int ma_method, int applied_price, int mode, int shift)
+        public double iGator(string symbol, int timeframe, int jawPeriod, int jawShift, int teethPeriod, int teethShift, int lipsPeriod, int lipsShift, int maMethod, int appliedPrice, int mode, int shift)
         {
-            var commandParameters = new ArrayList { symbol, timeframe, jaw_period, jaw_shift, teeth_period, teeth_shift, lips_period, lips_shift, ma_method, applied_price, mode, shift };
+            var commandParameters = new ArrayList { symbol, timeframe, jawPeriod, jawShift, teethPeriod, teethShift, lipsPeriod, lipsShift, maMethod, appliedPrice, mode, shift };
             return SendCommand<double>(MtCommandType.iGator, commandParameters);
         }
 
-        public double iIchimoku(string symbol, int timeframe, int tenkan_sen, int kijun_sen, int senkou_span_b, int mode, int shift)
+        public double iIchimoku(string symbol, int timeframe, int tenkanSen, int kijunSen, int senkouSpanB, int mode, int shift)
         {
-            var commandParameters = new ArrayList { symbol, timeframe, tenkan_sen, kijun_sen, senkou_span_b, mode, shift };
+            var commandParameters = new ArrayList { symbol, timeframe, tenkanSen, kijunSen, senkouSpanB, mode, shift };
             return SendCommand<double>(MtCommandType.iIchimoku, commandParameters);
         }
 
@@ -1096,17 +1244,17 @@ namespace MtApi
             return SendCommand<double>(MtCommandType.iBWMFI, commandParameters);
         }
 
-        public double iMomentum(string symbol, int timeframe, int period, int applied_price, int shift)
+        public double iMomentum(string symbol, int timeframe, int period, int appliedPrice, int shift)
         {
-            var commandParameters = new ArrayList { symbol, timeframe, period, applied_price, shift };
+            var commandParameters = new ArrayList { symbol, timeframe, period, appliedPrice, shift };
             return SendCommand<double>(MtCommandType.iMomentum, commandParameters);
         }
 
         public double iMomentumOnArray(double[] array, int total, int period, int shift)
         {
-            int arraySize = array != null ? array.Length : 0;
+            var arraySize = array?.Length ?? 0;
             var commandParameters = new ArrayList { arraySize };
-            commandParameters.AddRange(array);
+            commandParameters.AddRange(array ?? new double[] {});
             commandParameters.Add(total);
             commandParameters.Add(period);
             commandParameters.Add(shift);
@@ -1120,41 +1268,41 @@ namespace MtApi
             return SendCommand<double>(MtCommandType.iMFI, commandParameters);
         }
 
-        public double iMA(string symbol, int timeframe, int period, int ma_shift, int ma_method, int applied_price, int shift)
+        public double iMA(string symbol, int timeframe, int period, int maShift, int maMethod, int appliedPrice, int shift)
         {
-            var commandParameters = new ArrayList { symbol, timeframe, period, ma_shift, ma_method, applied_price, shift };
+            var commandParameters = new ArrayList { symbol, timeframe, period, maShift, maMethod, appliedPrice, shift };
             return SendCommand<double>(MtCommandType.iMA, commandParameters);
         }
 
-        double iMAOnArray(double[] array, int total, int period, int ma_shift, int ma_method, int shift)
+        public double iMAOnArray(double[] array, int total, int period, int maShift, int maMethod, int shift)
         {
-            int arraySize = array != null ? array.Length : 0;
+            var arraySize = array?.Length ?? 0;
             var commandParameters = new ArrayList { arraySize };
-            commandParameters.AddRange(array);
+            commandParameters.AddRange(array ?? new double[] {});
             commandParameters.Add(total);
             commandParameters.Add(period);
-            commandParameters.Add(ma_shift);
-            commandParameters.Add(ma_method);
+            commandParameters.Add(maShift);
+            commandParameters.Add(maMethod);
             commandParameters.Add(shift);
 
             return SendCommand<double>(MtCommandType.iMAOnArray, commandParameters);
         }
 
-        public double iOsMA(string symbol, int timeframe, int fast_ema_period, int slow_ema_period, int signal_period, int applied_price, int shift)
+        public double iOsMA(string symbol, int timeframe, int fastEmaPeriod, int slowEmaPeriod, int signalPeriod, int appliedPrice, int shift)
         {
-            var commandParameters = new ArrayList { symbol, timeframe, fast_ema_period, slow_ema_period, signal_period, applied_price, shift };
+            var commandParameters = new ArrayList { symbol, timeframe, fastEmaPeriod, slowEmaPeriod, signalPeriod, appliedPrice, shift };
             return SendCommand<double>(MtCommandType.iOsMA, commandParameters);
         }
 
-        public double iMACD(string symbol, int timeframe, int fast_ema_period, int slow_ema_period, int signal_period, int applied_price, int mode, int shift)
+        public double iMACD(string symbol, int timeframe, int fastEmaPeriod, int slowEmaPeriod, int signalPeriod, int appliedPrice, int mode, int shift)
         {
-            var commandParameters = new ArrayList { symbol, timeframe, fast_ema_period, slow_ema_period, signal_period, applied_price, mode, shift };
+            var commandParameters = new ArrayList { symbol, timeframe, fastEmaPeriod, slowEmaPeriod, signalPeriod, appliedPrice, mode, shift };
             return SendCommand<double>(MtCommandType.iMACD, commandParameters);
         }
 
-        public double iOBV(string symbol, int timeframe, int applied_price, int shift)
+        public double iOBV(string symbol, int timeframe, int appliedPrice, int shift)
         {
-            var commandParameters = new ArrayList { symbol, timeframe, applied_price, shift };
+            var commandParameters = new ArrayList { symbol, timeframe, appliedPrice, shift };
             return SendCommand<double>(MtCommandType.iOBV, commandParameters);
         }
 
@@ -1164,17 +1312,17 @@ namespace MtApi
             return SendCommand<double>(MtCommandType.iSAR, commandParameters);
         }
 
-        public double iRSI( string symbol, int timeframe, int period, int applied_price, int shift)
+        public double iRSI( string symbol, int timeframe, int period, int appliedPrice, int shift)
         {
-            var commandParameters = new ArrayList { symbol, timeframe, period, applied_price, shift };
+            var commandParameters = new ArrayList { symbol, timeframe, period, appliedPrice, shift };
             return SendCommand<double>(MtCommandType.iRSI, commandParameters);
         }
 
         public double iRSIOnArray(double[] array, int total, int period, int shift)
         {
-            int arraySize = array != null ? array.Length : 0;
+            var arraySize = array?.Length ?? 0;
             var commandParameters = new ArrayList { arraySize };
-            commandParameters.AddRange(array);
+            commandParameters.AddRange(array ?? new double[] {});
             commandParameters.Add(total);
             commandParameters.Add(period);
             commandParameters.Add(shift);
@@ -1188,29 +1336,29 @@ namespace MtApi
             return SendCommand<double>(MtCommandType.iRVI, commandParameters);
         }
 
-        public double iStdDev(string symbol, int timeframe, int ma_period, int ma_shift, int ma_method, int applied_price, int shift)
+        public double iStdDev(string symbol, int timeframe, int maPeriod, int maShift, int maMethod, int appliedPrice, int shift)
         {
-            var commandParameters = new ArrayList { symbol, timeframe, ma_period, ma_shift, ma_method, applied_price, shift };
+            var commandParameters = new ArrayList { symbol, timeframe, maPeriod, maShift, maMethod, appliedPrice, shift };
             return SendCommand<double>(MtCommandType.iStdDev, commandParameters);
         }
 
-        public double iStdDevOnArray(double[] array, int total, int ma_period, int ma_shift, int ma_method, int shift)
+        public double iStdDevOnArray(double[] array, int total, int maPeriod, int maShift, int maMethod, int shift)
         {
-            int arraySize = array != null ? array.Length : 0;
+            var arraySize = array?.Length ?? 0;
             var commandParameters = new ArrayList { arraySize };
-            commandParameters.AddRange(array);
+            commandParameters.AddRange(array ?? new double[] {});
             commandParameters.Add(total);
-            commandParameters.Add(ma_period);
-            commandParameters.Add(ma_shift);
-            commandParameters.Add(ma_method);
+            commandParameters.Add(maPeriod);
+            commandParameters.Add(maShift);
+            commandParameters.Add(maMethod);
             commandParameters.Add(shift);
 
             return SendCommand<double>(MtCommandType.iStdDevOnArray, commandParameters);
         }
 
-        public double iStochastic(string symbol, int timeframe, int pKperiod, int pDperiod, int slowing, int method, int price_field, int mode, int shift)
+        public double iStochastic(string symbol, int timeframe, int pKperiod, int pDperiod, int slowing, int method, int priceField, int mode, int shift)
         {
-            var commandParameters = new ArrayList { symbol, timeframe, pKperiod, pDperiod, slowing, method, price_field, mode, shift };
+            var commandParameters = new ArrayList { symbol, timeframe, pKperiod, pDperiod, slowing, method, priceField, mode, shift };
             return SendCommand<double>(MtCommandType.iStochastic, commandParameters);
         }
 
@@ -1353,7 +1501,7 @@ namespace MtApi
             {
                 result = new DateTime[response.Length];
 
-                for(int i = 0; i < response.Length; i++)
+                for(var i = 0; i < response.Length; i++)
                 {
                     result[i] = MtApiTimeConverter.ConvertFromMtTime(response[i]);
                 }
@@ -1367,169 +1515,832 @@ namespace MtApi
             return SendCommand<bool>(MtCommandType.RefreshRates, null);
         }
 
-        public List<MqlRates> CopyRates(string symbol_name, ENUM_TIMEFRAMES timeframe, int start_pos, int count)
+        public List<MqlRates> CopyRates(string symbolName, ENUM_TIMEFRAMES timeframe, int startPos, int count)
         {
             var response = SendRequest<CopyRatesResponse>(new CopyRates1Request
             {
-                SymbolName = symbol_name,
+                SymbolName = symbolName,
                 Timeframe = timeframe,
-                StartPos = start_pos,
+                StartPos = startPos,
                 Count = count
             });
-            return response != null ? response.Rates : null;
+            return response?.Rates;
         }
 
-        public List<MqlRates> CopyRates(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, int count)
+        public List<MqlRates> CopyRates(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, int count)
         {
             var response = SendRequest<CopyRatesResponse>(new CopyRates2Request
             {
-                SymbolName = symbol_name,
+                SymbolName = symbolName,
                 Timeframe = timeframe,
-                StartTime = MtApiTimeConverter.ConvertToMtTime(start_time),
+                StartTime = MtApiTimeConverter.ConvertToMtTime(startTime),
                 Count = count
             });
-            return response != null ? response.Rates : null;
+            return response?.Rates;
         }
 
-        public List<MqlRates> CopyRates(string symbol_name, ENUM_TIMEFRAMES timeframe, DateTime start_time, DateTime stop_time)
+        public List<MqlRates> CopyRates(string symbolName, ENUM_TIMEFRAMES timeframe, DateTime startTime, DateTime stopTime)
         {
             var response = SendRequest<CopyRatesResponse>(new CopyRates3Request
             {
-                SymbolName = symbol_name,
+                SymbolName = symbolName,
                 Timeframe = timeframe,
-                StartTime = MtApiTimeConverter.ConvertToMtTime(start_time),
-                StopTime = MtApiTimeConverter.ConvertToMtTime(stop_time)
+                StartTime = MtApiTimeConverter.ConvertToMtTime(startTime),
+                StopTime = MtApiTimeConverter.ConvertToMtTime(stopTime)
             });
-            return response != null ? response.Rates : null;
+            return response?.Rates;
         }
 
-        private void BaBacktestingReady()
+        ///<summary>
+        ///Returns information about the state of historical data.
+        ///</summary>
+        ///<param name="symbolName">Symbol name.</param>
+        ///<param name="timeframe">Period.</param>
+        ///<param name="propId">Identifier of the requested property, value of the ENUM_SERIES_INFO_INTEGER enumeration.</param>
+        ///<returns>
+        ///Returns value of the long type.
+        ///</returns>
+        public long SeriesInfoInteger(string symbolName, ENUM_TIMEFRAMES timeframe, EnumSeriesInfoInteger propId)
         {
-            SendCommand<object>(MtCommandType.BacktestingReady, null);
+            var response = SendRequest<SeriesInfoIntegerResponse>(new SeriesInfoIntegerRequest
+            {
+                SymbolName = symbolName,
+                Timeframe = (int)timeframe,
+                PropId = (int)propId
+            });
+
+            return response?.Value ?? 0;
         }
 
         #endregion
 
-        #region Checkup
-        public string TerminalInfoString(ENUM_TERMINAL_INFO_STRING property_id)
+        #region Market Info
+
+        ///<summary>
+        ///Returns various data about securities listed in the "Market Watch" window.
+        ///</summary>
+        ///<param name="symbol">Symbol name.</param>
+        ///<param name="type">Request identifier that defines the type of information to be returned. Can be any of values of request identifiers.</param>
+        ///<returns>
+        ///Returns various data about securities listed in the "Market Watch" window.
+        ///</returns>
+        public double MarketInfo(string symbol, MarketInfoModeType type)
         {
-            var commandParameters = new ArrayList { (int)property_id };
-            return SendCommand<string>(MtCommandType.TerminalInfoString, commandParameters);
+            var commandParameters = new ArrayList { symbol, (int)type };
+            return SendCommand<double>(MtCommandType.MarketInfo, commandParameters);
         }
 
-        public string SymbolInfoString(string name, ENUM_SYMBOL_INFO_STRING prop_id)
+        ///<summary>
+        ///Returns the number of available (selected in Market Watch or all) symbols.
+        ///</summary>
+        ///<param name="selected">Request mode. Can be true or false.</param>
+        ///<returns>
+        ///If the 'selected' parameter is true, the function returns the number of symbols selected in MarketWatch. If the value is false, it returns the total number of all symbols.
+        ///</returns>
+        public int SymbolsTotal(bool selected)
         {
-            var commandParameters = new ArrayList { name, (int)prop_id };
-            return SendCommand<string>(MtCommandType.SymbolInfoString, commandParameters); ;
+            var commandParameters = new ArrayList { selected };
+            return SendCommand<int>(MtCommandType.SymbolsTotal, commandParameters);
         }
+
+        ///<summary>
+        ///Returns the name of a symbol.
+        ///</summary>
+        ///<param name="pos">Order number of a symbol.</param>
+        ///<param name="selected">Request mode. If the value is true, the symbol is taken from the list of symbols selected in MarketWatch. If the value is false, the symbol is taken from the general list.</param>
+        ///<returns>
+        ///Value of string type with the symbol name.
+        ///</returns>
+        public string SymbolName(int pos, bool selected)
+        {
+            var commandParameters = new ArrayList { pos, selected };
+            return SendCommand<string>(MtCommandType.SymbolName, commandParameters);
+        }
+
+        ///<summary>
+        ///Selects a symbol in the Market Watch window or removes a symbol from the window.
+        ///</summary>
+        ///<param name="name">Symbol name</param>
+        ///<param name="select">Switch. If the value is false, a symbol should be removed from MarketWatch, otherwise a symbol should be selected in this window. A symbol can't be removed if the symbol chart is open, or there are open orders for this symbol.</param>
+        ///<returns>
+        ///In case of failure returns false.
+        ///</returns>
+        public bool SymbolSelect(string name, bool select)
+        {
+            var commandParameters = new ArrayList { name, select };
+            return SendCommand<bool>(MtCommandType.SymbolSelect, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the corresponding property of a specified symbol.
+        ///</summary>
+        ///<param name="name">Symbol name</param>
+        ///<param name="propId">Identifier of a symbol property. The value can be one of the values of the EnumSymbolInfoInteger enumeration</param>
+        ///<returns>
+        ///The value of long type.
+        ///</returns>
+        public long SymbolInfoInteger(string name, EnumSymbolInfoInteger propId)
+        {
+            var commandParameters = new ArrayList { name, (int)propId };
+            return SendCommand<long>(MtCommandType.SymbolInfoInteger, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the corresponding property of a specified symbol.
+        ///</summary>
+        ///<param name="name">Symbol name</param>
+        ///<param name="propId">Identifier of a symbol property. The value can be one of the values of the ENUM_SYMBOL_INFO_STRING enumeration.</param>
+        ///<returns>
+        ///The value of string type.
+        ///</returns>
+        public string SymbolInfoString(string name, ENUM_SYMBOL_INFO_STRING propId)
+        {
+            var commandParameters = new ArrayList { name, (int)propId };
+            return SendCommand<string>(MtCommandType.SymbolInfoString, commandParameters);
+        }
+
+        ///<summary>
+        ///Allows receiving time of beginning and end of the specified quoting/trading  sessions for a specified symbol and day of week.
+        /// 
+        ///</summary>
+        ///<param name="symbol">Symbol name.</param>
+        ///<param name="dayOfWeek">Day of the week.</param>
+        ///<param name="index">Ordinal number of a session, whose beginning and end time we want to receive. Indexing of sessions starts with 0.</param>
+        ///<param name="type">Session type: Quote, Trade</param>
+        ///<returns>
+        ///The value session.
+        ///</returns>
+        public MtSession SymbolInfoSession(string symbol, DayOfWeek dayOfWeek, uint index, SessionType type)
+        {
+            var responce = SendRequest<SessionResponse>(new SessionRequest { Symbol = symbol, DayOfWeek = dayOfWeek, SessionIndex = (int)index, SessionType = type });
+            return responce?.Session;
+        }
+
+        ///<summary>
+        ///Returns the corresponding property of a specified symbol.
+        ///</summary>
+        ///<param name="symbolName">Symbol name.</param>
+        ///<param name="propId">Identifier of a symbol property. The value can be one of the values of the ENUM_SYMBOL_INFO_DOUBLE enumeration.</param>
+        /// <returns>
+        /// The value of double type.
+        /// </returns>
+        public double SymbolInfoDouble(string symbolName, EnumSymbolInfoDouble propId)
+        {
+            var response = SendRequest<SymbolInfoDoubleResponse>(new SymbolInfoDoubleRequest
+            {
+                SymbolName = symbolName,
+                PropId = (int)propId
+            });
+
+            return response?.Value ?? 0;
+        }
+
+        ///<summary>
+        ///Returns the corresponding property of a specified symbol.
+        ///</summary>
+        ///<param name="symbol">Symbol name.</param>
+        /// <returns>
+        /// MqlTick object, to which the current prices and time of the last price update will be placed.
+        /// </returns>
+        public MqlTick SymbolInfoTick(string symbol)
+        {
+            var response = SendRequest<SymbolInfoTickResponse>(new SymbolInfoTickRequest
+            {
+                Symbol = symbol
+            });
+
+            return response?.Tick;
+        }
+        #endregion
+
+        #region Chart Operations
+
+        ///<summary>
+        ///Returns the ID of the current chart.
+        ///</summary>
+        ///<returns>
+        /// Value of long type.
+        ///</returns>
+        public long ChartId()
+        {
+            return SendCommand<long>(MtCommandType.ChartId, null);
+        }
+
+        ///<summary>
+        ///This function calls a forced redrawing of a specified chart.
+        ///</summary>
+        public void ChartRedraw(long chartId = 0)
+        {
+            var commandParameters = new ArrayList { chartId };
+            SendCommand<object>(MtCommandType.ChartRedraw, commandParameters);
+        }
+        #endregion
+
+        #region Object Functions
+
+        ///<summary>
+        ///The function creates an object with the specified name, type, and the initial coordinates in the specified chart subwindow of the specified chart.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="objectName">Name of the object. The name must be unique within a chart, including its subwindows.</param>
+        ///<param name="objectType">Object type.</param>
+        ///<param name="subWindow">Number of the chart subwindow. 0 means the main chart window.</param>
+        ///<param name="time1">The time coordinate of the first anchor point.</param>
+        ///<param name="price1">The price coordinate of the first anchor point.</param>
+        ///<param name="time2">The time coordinate of the second anchor point.</param>
+        ///<param name="price2">The price coordinate of the second anchor point.</param>
+        ///<param name="time3">The time coordinate of the third anchor point.</param>
+        ///<param name="price3">The price coordinate of the third anchor point.</param>
+        ///<returns>
+        ///Returns true or false depending on whether the object is created or not. 
+        ///</returns>
+        public bool ObjectCreate(long chartId, string objectName, EnumObject objectType, int subWindow, 
+            DateTime? time1, double price1, DateTime? time2 = null, double? price2 = null, DateTime? time3 = null, double? price3 = null)
+        {
+            var namedParams = new Dictionary<string, object>
+            {
+                {nameof(chartId), chartId},
+                {nameof(objectName), objectName},
+                {nameof(objectType), (int) objectType},
+                {nameof(subWindow), subWindow},
+                {nameof(time1), MtApiTimeConverter.ConvertToMtTime(time1)},
+                {nameof(price1), price1}
+            };
+
+            if (time2 != null)
+                namedParams.Add(nameof(time2), MtApiTimeConverter.ConvertToMtTime(time2.Value));
+            if (price2 != null)
+                namedParams.Add(nameof(price2), price2.Value);
+            if (time3 != null)
+                namedParams.Add(nameof(time3), MtApiTimeConverter.ConvertToMtTime(time3.Value));
+            if (price3 != null)
+                namedParams.Add(nameof(price3), price3.Value);
+
+            return SendCommand<bool>(MtCommandType.ObjectCreate, null, namedParams);
+        }
+
+        ///<summary>
+        ///The function returns the name of the corresponding object by its index in the objects list.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="objectIndex">Object index. This value must be greater or equal to 0 and less than ObjectsTotal().</param>
+        ///<param name="subWindow">Number of the chart window. Must be greater or equal to -1 (-1 mean all subwindows, 0 means the main chart window) and less than WindowsTotal().</param>
+        ///<param name="objectType">Type of the object. The value can be one of the values of the EnumObject enumeration. EMPTY (-1) means all types.</param>
+        ///<returns>
+        ///Name of the object is returned in case of success.
+        ///</returns>
+        public string ObjectName(long chartId, int objectIndex, int subWindow = EMPTY, int objectType = EMPTY)
+        {
+            var commandParameters = new ArrayList { chartId, objectIndex, subWindow, objectType };
+            return SendCommand<string>(MtCommandType.ObjectName, commandParameters);
+        }
+
+        ///<summary>
+        ///The function removes the object with the specified name at the specified chart.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="objectName">Name of object to be deleted.</param>
+        ///<returns>
+        ///Returns true if the removal was successful, otherwise returns false.
+        ///</returns>
+        public bool ObjectDelete(long chartId, string objectName)
+        {
+            var commandParameters = new ArrayList { chartId, objectName };
+            return SendCommand<bool>(MtCommandType.ObjectDelete, commandParameters);
+        }
+
+        ///<summary>
+        ///The function removes the object with the specified name at the specified chart.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="subWindow">Number of the chart window. Must be greater or equal to -1 (-1 mean all subwindows, 0 means the main chart window) and less than WindowsTotal().</param>
+        ///<param name="objectType">Type of the object. The value can be one of the values of the EnumObject enumeration. EMPTY (-1) means all types.</param>
+        ///<returns>
+        ///Returns true if the removal was successful, otherwise returns false.
+        ///</returns>
+        public int ObjectsDeleteAll(long chartId, int subWindow = EMPTY, int objectType = EMPTY)
+        {
+            var commandParameters = new ArrayList { chartId, subWindow, objectType };
+            return SendCommand<int>(MtCommandType.ObjectsDeleteAll, commandParameters);
+        }
+
+        ///<summary>
+        ///The function searches for an object having the specified name.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="objectName">The name of the object to find.</param>
+        ///<returns>
+        ///If successful the function returns the number of the subwindow (0 means the main window of the chart), in which the object is found. 
+        ///</returns>
+        public int ObjectFind(long chartId, string objectName)
+        {
+            var commandParameters = new ArrayList { chartId, objectName };
+            return SendCommand<int>(MtCommandType.ObjectFind, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the time value for the specified price value of the specified object.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="objectName">Name of the object.</param>
+        ///<param name="value">Price value.</param>
+        ///<param name="lineId">Line identifier.</param>
+        ///<returns>
+        ///The time value for the specified price value of the specified object.
+        ///</returns>
+        public DateTime ObjectGetTimeByValue(long chartId, string objectName, double value, int lineId = 0)
+        {
+            var commandParameters = new ArrayList { chartId, objectName, value, lineId };
+            var res = SendCommand<int>(MtCommandType.ObjectGetTimeByValue, commandParameters);
+            return MtApiTimeConverter.ConvertFromMtTime(res);
+        }
+
+        ///<summary>
+        ///The function returns the price value for the specified time value of the specified object.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="objectName">Name of the object.</param>
+        ///<param name="time">Time value.</param>
+        ///<param name="lineId">Line identifier.</param>
+        ///<returns>
+        ///The price value for the specified time value of the specified object.
+        ///</returns>
+        public double ObjectGetValueByTime(long chartId, string objectName, DateTime? time, int lineId = 0)
+        {
+            var commandParameters = new ArrayList { chartId, objectName, time, lineId };
+            return SendCommand<double>(MtCommandType.ObjectGetValueByTime, commandParameters);
+        }
+
+        ///<summary>
+        ///The function changes coordinates of the specified anchor point of the object at the specified chart
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="objectName">Name of the object.</param>
+        ///<param name="pointIndex">Index of the anchor point.</param>
+        ///<param name="time">Time coordinate of the selected anchor point.</param>
+        ///<param name="price">Price coordinate of the selected anchor point.</param>
+        ///<returns>
+        ///If successful, returns true, in case of failure returns false.
+        ///</returns>
+        public bool ObjectMove(long chartId, string objectName, int pointIndex, DateTime? time, double price)
+        {
+            var commandParameters = new ArrayList { chartId, objectName, pointIndex, MtApiTimeConverter.ConvertToMtTime(time), price };
+            return SendCommand<bool>(MtCommandType.ObjectMove, commandParameters);
+        }
+
+        ///<summary>
+        ///The function changes coordinates of the specified anchor point of the object at the specified chart.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="subWindow">Number of the chart subwindow. 0 means the main chart window, -1 means all the subwindows of the chart, including the main window.</param>
+        ///<param name="type">Type of the object. The value can be one of the values of the EnumObject enumeration. EMPTY(-1) means all types.</param>
+        ///<returns>
+        ///The number of objects.
+        ///</returns>
+        public int ObjectsTotal(long chartId, int subWindow = EMPTY, int type = EMPTY)
+        {
+            var commandParameters = new ArrayList { chartId, subWindow, type };
+            return SendCommand<int>(MtCommandType.ObjectsTotal, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the value of the corresponding object property.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="objectName">Name of the object.</param>
+        ///<param name="propId">ID of the object property. The value can be one of the values of the EnumObjectPropertyDouble enumeration.</param>
+        ///<param name="propModifier">Modifier of the specified property. For the first variant, the default modifier value is equal to 0. Most properties do not require a modifier.</param>
+        ///<returns>
+        ///Value of the double type.
+        ///</returns>
+        public double ObjectGetDouble(long chartId, string objectName, EnumObjectPropertyDouble propId, int propModifier = 0)
+        {
+            var commandParameters = new ArrayList { chartId, objectName, (int)propId, propModifier };
+            return SendCommand<double>(MtCommandType.ObjectGetDouble, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the value of the corresponding object property. The object property must be of the datetime, int, color, bool or char type.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="objectName">Name of the object.</param>
+        ///<param name="propId">ID of the object property. The value can be one of the values of the EnumObjectPropertyDouble enumeration.</param>
+        ///<param name="propModifier">Modifier of the specified property. For the first variant, the default modifier value is equal to 0. Most properties do not require a modifier.</param>
+        ///<returns>
+        ///The long value.
+        ///</returns>
+        public long ObjectGetInteger(long chartId, string objectName, EnumObjectPropertyInteger propId, int propModifier = 0)
+        {
+            var commandParameters = new ArrayList { chartId, objectName, (int)propId, propModifier };
+            return SendCommand<long>(MtCommandType.ObjectGetInteger, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the value of the corresponding object property. The object property must be of the string type.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="objectName">Name of the object.</param>
+        ///<param name="propId">ID of the object property. The value can be one of the values of the EnumObjectPropertyString enumeration.</param>
+        ///<param name="propModifier">Modifier of the specified property. For the first variant, the default modifier value is equal to 0. Most properties do not require a modifier.  It denotes the number of the level in Fibonacci tools and in the graphical object Andrew's pitchfork. The numeration of levels starts from zero.</param>
+        ///<returns>
+        ///String value.
+        ///</returns>
+        public string ObjectGetString(long chartId, string objectName, EnumObjectPropertyString propId, int propModifier = 0)
+        {
+            var commandParameters = new ArrayList { chartId, objectName, (int)propId, propModifier };
+            return SendCommand<string>(MtCommandType.ObjectGetString, commandParameters);
+        }
+
+        ///<summary>
+        ///The function sets the value of the corresponding object property. The object property must be of the double type. 
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="objectName">Name of the object.</param>
+        ///<param name="propId">ID of the object property. The value can be one of the values of the EnumObjectPropertyDouble enumeration.</param>
+        ///<param name="propValue">The value of the property.</param>
+        ///<returns>
+        ///The function returns true only if the command to change properties of a graphical object has been sent to a chart successfully.
+        ///</returns>
+        public bool ObjectSetDouble(long chartId, string objectName, EnumObjectPropertyDouble propId, double propValue)
+        {
+            var commandParameters = new ArrayList { chartId, objectName, (int)propId, propValue };
+            return SendCommand<bool>(MtCommandType.ObjectSetDouble, commandParameters);
+        }
+
+        ///<summary>
+        ///The function sets the value of the corresponding object property. The object property must be of the double type. 
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="objectName">Name of the object.</param>
+        ///<param name="propId">ID of the object property. The value can be one of the values of the EnumObjectPropertyDouble enumeration.</param>
+        ///<param name="propModifier">Modifier of the specified property. It denotes the number of the level in Fibonacci tools and in the graphical object Andrew's pitchfork. The numeration of levels starts from zero.</param>
+        ///<param name="propValue">The value of the property.</param>
+        ///<returns>
+        ///The function returns true only if the command to change properties of a graphical object has been sent to a chart successfully.
+        ///</returns>
+        public bool ObjectSetDouble(long chartId, string objectName, EnumObjectPropertyDouble propId, int propModifier, double propValue)
+        {
+            var commandParameters = new ArrayList { chartId, objectName, (int)propId, propValue };
+            var namedParams = new Dictionary<string, object> {{nameof(propModifier), propModifier}};
+            return SendCommand<bool>(MtCommandType.ObjectSetDouble, commandParameters, namedParams);
+        }
+
+        ///<summary>
+        ///The function sets the value of the corresponding object property. The object property must be of the int type. 
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="objectName">Name of the object.</param>
+        ///<param name="propId">ID of the object property. The value can be one of the values of the EnumObjectPropertyInteger enumeration.</param>
+        ///<param name="propValue">The value of the property.</param>
+        ///<returns>
+        ///The function returns true only if the command to change properties of a graphical object has been sent to a chart successfully. Otherwise it returns false. 
+        ///</returns>
+        public bool ObjectSetInteger(long chartId, string objectName, EnumObjectPropertyInteger propId, long propValue)
+        {
+            var commandParameters = new ArrayList { chartId, objectName, (int)propId, propValue };
+            return SendCommand<bool>(MtCommandType.ObjectSetInteger, commandParameters);
+        }
+
+        ///<summary>
+        ///The function sets the value of the corresponding object property. The object property must be of the int type. 
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="objectName">Name of the object.</param>
+        ///<param name="propId">ID of the object property. The value can be one of the values of the EnumObjectPropertyInteger enumeration.</param>
+        ///<param name="propModifier">Modifier of the specified property. It denotes the number of the level in Fibonacci tools and in the graphical object Andrew's pitchfork. The numeration of levels starts from zero.</param>
+        ///<param name="propValue">The value of the property.</param>
+        ///<returns>
+        ///The function returns true only if the command to change properties of a graphical object has been sent to a chart successfully. Otherwise it returns false. 
+        ///</returns>
+        public bool ObjectSetInteger(long chartId, string objectName, EnumObjectPropertyInteger propId, int propModifier, long propValue)
+        {
+            var commandParameters = new ArrayList { chartId, objectName, (int)propId, propValue };
+            var namedParams = new Dictionary<string, object> {{nameof(propModifier), propModifier}};
+            return SendCommand<bool>(MtCommandType.ObjectSetInteger, commandParameters, namedParams);
+        }
+
+        ///<summary>
+        ///The function sets the value of the corresponding object property. The object property must be of the string type. 
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="objectName">Name of the object.</param>
+        ///<param name="propId">ID of the object property. The value can be one of the values of the EnumObjectPropertyString enumeration.</param>
+        ///<param name="propValue">The value of the property.</param>
+        ///<returns>
+        ///The function returns true only if the command to change properties of a graphical object has been sent to a chart successfully. Otherwise it returns false. 
+        ///</returns>
+        public bool ObjectSetString(long chartId, string objectName, EnumObjectPropertyString propId, string propValue)
+        {
+            var commandParameters = new ArrayList { chartId, objectName, (int)propId, propValue };
+            return SendCommand<bool>(MtCommandType.ObjectSetString, commandParameters);
+        }
+
+        ///<summary>
+        ///The function sets the value of the corresponding object property. The object property must be of the string type. 
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="objectName">Name of the object.</param>
+        ///<param name="propId">ID of the object property. The value can be one of the values of the EnumObjectPropertyString enumeration.</param>
+        ///<param name="propModifier">Modifier of the specified property. It denotes the number of the level in Fibonacci tools and in the graphical object Andrew's pitchfork. The numeration of levels starts from zero.</param>
+        ///<param name="propValue">The value of the property.</param>
+        ///<returns>
+        ///The function returns true only if the command to change properties of a graphical object has been sent to a chart successfully. Otherwise it returns false. 
+        ///</returns>
+        public bool ObjectSetString(long chartId, string objectName, EnumObjectPropertyString propId, int propModifier, string propValue)
+        {
+            var commandParameters = new ArrayList { chartId, objectName, (int)propId, propValue };
+            var namedParams = new Dictionary<string, object> {{nameof(propModifier), propModifier}};
+            return SendCommand<bool>(MtCommandType.ObjectSetString, commandParameters, namedParams);
+        }
+
+        ///<summary>
+        ///The function sets the font for displaying the text using drawing methods and returns the result of that operation. Arial font with the size -120 (12 pt) is used by default.
+        ///</summary>
+        ///<param name="name">Font name in the system or the name of the resource containing the font or the path to font file on the disk.</param>
+        ///<param name="size">The font size that can be set using positive and negative values. In case of positive values, the size of a displayed text does not depend on the operating system's font size settings. In case of negative values, the value is set in tenths of a point and the text size depends on the operating system settings ("standard scale" or "large scale"). See the Note below for more information about the differences between the modes.</param>
+        ///<param name="flags">Combination of flags describing font style.</param>
+        ///<param name="orientation">Text's horizontal inclination to X axis, the unit of measurement is 0.1 degrees. It means that orientation=450 stands for inclination equal to 45 degrees.</param>
+        ///<returns>
+        ///Returns true if the current font is successfully installed, otherwise false.
+        ///</returns>
+        public bool TextSetFont(string name, int size, FlagFontStyle flags = 0, int orientation = 0)
+        {
+            var commandParameters = new ArrayList { name, size, (uint)flags, orientation };
+            return SendCommand<bool>(MtCommandType.TextSetFont, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the object description.
+        ///</summary>
+        ///<param name="objectName">Object name.</param>
+        ///<returns>
+        ///Object description. For objects of OBJ_TEXT and OBJ_LABEL types, the text drawn by these objects will be returned.
+        ///</returns>
+        public string ObjectDescription(string objectName)
+        {
+            var commandParameters = new ArrayList { objectName };
+            return SendCommand<string>(MtCommandType.ObjectDescription, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the level description of a Fibonacci object.
+        ///</summary>
+        ///<param name="objectName">Fibonacci object name.</param>
+        ///<param name="index">Index of the Fibonacci level (0-31).</param>
+        ///<returns>
+        ///The level description of a Fibonacci object.
+        ///</returns>
+        public string ObjectGetFiboDescription(string objectName, int index)
+        {
+            var commandParameters = new ArrayList { objectName, index };
+            return SendCommand<string>(MtCommandType.ObjectGetFiboDescription, commandParameters);
+        }
+
+        ///<summary>
+        ///The function calculates and returns bar index (shift related to the current bar) for the given price.
+        ///</summary>
+        ///<param name="objectName">Object name.</param>
+        ///<param name="value">Price value.</param>
+        ///<returns>
+        ///The function calculates and returns bar index (shift related to the current bar) for the given price. The bar index is calculated by the first and second coordinates using a linear equation. Applied to trendlines and similar objects.
+        ///</returns>
+        public int ObjectGetShiftByValue(string objectName, double value)
+        {
+            var commandParameters = new ArrayList { objectName, value };
+            return SendCommand<int>(MtCommandType.ObjectGetShiftByValue, commandParameters);
+        }
+
+        ///<summary>
+        ///The function calculates and returns the price value for the specified bar (shift related to the current bar).
+        ///</summary>
+        ///<param name="objectName">Object name.</param>
+        ///<param name="shift">Bar index.</param>
+        ///<returns>
+        ///The function calculates and returns the price value for the specified bar (shift related to the current bar). The price value is calculated by the first and second coordinates using a linear equation. Applied to trendlines and similar objects.
+        ///</returns>
+        public double ObjectGetValueByShift(string objectName, int shift)
+        {
+            var commandParameters = new ArrayList { objectName, shift };
+            return SendCommand<double>(MtCommandType.ObjectGetValueByShift, commandParameters);
+        }
+
+        ///<summary>
+        ///Changes the value of the specified object property.
+        ///</summary>
+        ///<param name="objectName">Object name.</param>
+        ///<param name="index">Object property index. It can be any of object properties enumeration values.</param>
+        ///<param name="value">New value of the given property.</param>
+        ///<returns>
+        ///If the function succeeds, the returned value will be true, otherwise it returns false.
+        ///</returns>
+        public bool ObjectSet(string objectName, int index, double value)
+        {
+            var commandParameters = new ArrayList { objectName, index, value };
+            return SendCommand<bool>(MtCommandType.ObjectSet, commandParameters);
+        }
+
+        ///<summary>
+        ///The function sets a new description to a level of a Fibonacci object.
+        ///</summary>
+        ///<param name="objectName">Object name.</param>
+        ///<param name="index">Index of the Fibonacci level (0-31).</param>
+        ///<param name="text">New description of the level.</param>
+        ///<returns>
+        ///The function returns true if successful, otherwise false.
+        ///</returns>
+        public bool ObjectSetFiboDescription(string objectName, int index, string text)
+        {
+            var commandParameters = new ArrayList { objectName, index, text };
+            return SendCommand<bool>(MtCommandType.ObjectSetFiboDescription, commandParameters);
+        }
+
+        ///<summary>
+        ///The function changes the object description.
+        ///</summary>
+        ///<param name="objectName">Object name.</param>
+        ///<param name="text">A text describing the object.</param>
+        ///<param name="fontSize">Font size in points.</param>
+        ///<param name="fontName">Font name.</param>
+        ///<param name="textColor">Font color.</param>
+        ///<returns>
+        ///Changes the object description.  If the function succeeds, the returned value will be true, otherwise false.
+        ///</returns>
+        public bool ObjectSetText(string objectName, string text, int fontSize = 0, string fontName = null, Color? textColor = null)
+        {
+            var commandParameters = new ArrayList { objectName, text, fontSize, fontName, MtApiColorConverter.ConvertToMtColor(textColor) };
+            return SendCommand<bool>(MtCommandType.ObjectSetText, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the object type value.
+        ///</summary>
+        ///<param name="objectName">Object name.</param>
+        ///<returns>
+        ///The function returns the object type value. 
+        ///</returns>
+        public EnumObject ObjectType(string objectName)
+        {
+            var commandParameters = new ArrayList { objectName };
+            return (EnumObject)SendCommand<int>(MtCommandType.ObjectType, commandParameters);
+        }
+
         #endregion
 
         #region Private Methods
+        private MtClient Client
+        {
+            get
+            {
+                lock(_locker)
+                {
+                    return _client;
+                }
+            }
+        }
+
+        private void Connect(MtClient client)
+        {
+            lock (_locker)
+            {
+                if (_connectionState == MtConnectionState.Connected
+                    || _connectionState == MtConnectionState.Connecting)
+                {
+                    return;
+                }
+
+                _connectionState = MtConnectionState.Connecting;
+            }
+
+            string message = string.IsNullOrEmpty(client.Host) ? $"Connecting to localhost:{client.Port}" : $"Connecting to {client.Host}:{client.Port}";
+            ConnectionStateChanged?.Invoke(this, new MtConnectionEventArgs(MtConnectionState.Connecting, message));
+
+            var state = MtConnectionState.Failed;
+
+            lock (_locker)
+            {
+                try
+                {
+                    client.Connect();
+                    state = MtConnectionState.Connected;
+                }
+                catch (Exception e)
+                {
+                    client.Dispose();
+                    message = string.IsNullOrEmpty(client.Host) ? $"Failed connection to localhost:{client.Port}. {e.Message}" : $"Failed connection to {client.Host}:{client.Port}. {e.Message}";
+                }
+
+                if (state == MtConnectionState.Connected)
+                {
+                    _client = client;
+                    _client.QuoteAdded += _client_QuoteAdded;
+                    _client.QuoteRemoved += _client_QuoteRemoved;
+                    _client.QuoteUpdated += _client_QuoteUpdated;
+                    _client.ServerDisconnected += _client_ServerDisconnected;
+                    _client.ServerFailed += _client_ServerFailed;
+                    _client.MtEventReceived += _client_MtEventReceived;
+                    message = string.IsNullOrEmpty(client.Host) ? $"Connected to localhost:{client.Port}" : $"Connected to  { client.Host}:{client.Port}";
+                }
+
+                _connectionState = state;
+            }
+
+            ConnectionStateChanged?.Invoke(this, new MtConnectionEventArgs(state, message));
+
+            if (state == MtConnectionState.Connected)
+            {
+                OnConnected();
+            }
+        }
+
         private void Connect(string host, int port)
         {
-            UpdateConnectionState(MtConnectionState.Connecting, string.Format("Connecting to {0}:{1}", host, port));
-            try
-            {
-                _client.Open(host, port);
-                _client.Connect();
-            }
-            catch (Exception e)
-            {
-                UpdateConnectionState(MtConnectionState.Failed, string.Format("Failed connection to {0}:{1}. {2}", host, port, e.Message));
-                return;
-            }
-            UpdateConnectionState(MtConnectionState.Connected, string.Format("Connected  to  {0}:{1}", host, port));
-            OnConnected();
+            var client = new MtClient(host, port);
+            Connect(client);
         }
 
         private void Connect(int port)
         {
-            UpdateConnectionState(MtConnectionState.Connecting, string.Format("Connecting to 'localhost':{0}", port));
-            try
-            {
-                _client.Open(port);
-                _client.Connect();
-            }
-            catch (Exception e)
-            {
-                UpdateConnectionState(MtConnectionState.Failed, string.Format("Failed connection  to 'localhost':{0}. {1}", port, e.Message));
-                return;
-            }
-            UpdateConnectionState(MtConnectionState.Connected, string.Format("Connected to 'localhost':{0}", port));
-            OnConnected();
+            var client = new MtClient(port);
+            Connect(client);
         }
 
         private void OnConnected()
         {
-            IsBacktestingMode = IsTesting();
-            if (IsBacktestingMode)
-            {                
-                BaBacktestingReady();
+            _isBacktestingMode = IsTesting();
+            if (_isBacktestingMode)
+            {
+                BacktestingReady();
             }
         }
 
-        private void Disconnect()
+        private void Disconnect(bool failed)
         {
-            _client.Disconnect();
-            _client.Close();
+            var state =  failed ? MtConnectionState.Failed : MtConnectionState.Disconnected;
+            var message = failed ? "Connection Failed" : "Disconnected";
 
-            UpdateConnectionState(MtConnectionState.Disconnected, "Disconnected");
-        }
-
-        private void UpdateConnectionState(MtConnectionState state, string message)
-        {
-            var changed = false;
             lock (_locker)
             {
-                if (_connectionState != state)
+                if (_connectionState == MtConnectionState.Disconnected
+                    || _connectionState == MtConnectionState.Failed)
+                    return;
+
+                if (_client != null)
                 {
-                    _connectionState = state;
-                    changed = true;
+                    _client.QuoteAdded -= _client_QuoteAdded;
+                    _client.QuoteRemoved -= _client_QuoteRemoved;
+                    _client.QuoteUpdated -= _client_QuoteUpdated;
+                    _client.ServerDisconnected -= _client_ServerDisconnected;
+                    _client.ServerFailed -= _client_ServerFailed;
+                    _client.MtEventReceived -= _client_MtEventReceived;
+
+                    if (!failed)
+                    {
+                        _client.Disconnect();
+                    }
+
+                    _client.Dispose();
+
+                    _client = null;
                 }
+
+                _connectionState = state;
             }
 
-            if (changed)
-            {
-                ConnectionStateChanged.FireEventAsync(this, new MtConnectionEventArgs(state, message));
-            }
+
+            ConnectionStateChanged?.Invoke(this, new MtConnectionEventArgs(state, message));
         }
 
-        private T SendCommand<T>(MtCommandType commandType, ArrayList commandParameters)
+        private T SendCommand<T>(MtCommandType commandType, ArrayList commandParameters, Dictionary<string, object> namedParams = null)
         {
             MtResponse response;
+
+            var client = Client;
+            if (client == null)
+            {
+                throw new MtConnectionException("No connection");
+            }
+
             try
             {
-                response = _client.SendCommand((int)commandType, commandParameters);
+                response = client.SendCommand((int)commandType, commandParameters, namedParams, ExecutorHandle);
             }
             catch (CommunicationException ex)
             {
                 throw new MtConnectionException(ex.Message, ex);
             }
 
-            T result = default(T);
+            if (response == null)
+            {
+                throw new MtExecutionException(MtErrorCode.MtApiCustomError, "Response from MetaTrader is null");
+            }
 
-            if (response is MtResponseDouble)
-                result = (T)Convert.ChangeType(((MtResponseDouble)response).Value, typeof(T));
+            if (response.ErrorCode != 0)
+            {
+                throw new MtExecutionException((MtErrorCode)response.ErrorCode, response.ToString());
+            }
 
-            if (response is MtResponseInt)
-                result = (T)Convert.ChangeType(((MtResponseInt)response).Value, typeof(T));
-
-            if (response is MtResponseBool)
-                result = (T)Convert.ChangeType(((MtResponseBool)response).Value, typeof(T));
-
-            if (response is MtResponseString)
-                result = (T)Convert.ChangeType(((MtResponseString)response).Value, typeof(T));
-
-            if (response is MtResponseDoubleArray)
-                result = (T)Convert.ChangeType(((MtResponseDoubleArray)response).Value, typeof(T));
-
-            if (response is MtResponseIntArray)
-                result = (T)Convert.ChangeType(((MtResponseIntArray)response).Value, typeof(T));
-
-            if (response is MtResponseArrayList)
-                result = (T)Convert.ChangeType(((MtResponseArrayList)response).Value, typeof(T));
-
-            return result;
+            var responseValue = response.GetValue();
+            return responseValue != null ? (T)responseValue : default(T);
         }
 
         private T SendRequest<T>(RequestBase request) where T : ResponseBase, new()
@@ -1537,29 +2348,21 @@ namespace MtApi
             if (request == null)
                 return default(T);
 
-            var serializer = JsonConvert.SerializeObject(request, Newtonsoft.Json.Formatting.None,
+            var serializer = JsonConvert.SerializeObject(request, Formatting.None,
                             new JsonSerializerSettings
                             {
                                 NullValueHandling = NullValueHandling.Ignore
-                            });                
+                            });
             var commandParameters = new ArrayList { serializer };
 
-            MtResponseString res;
-            try
-            {
-                res = (MtResponseString)_client.SendCommand((int)MtCommandType.MtRequest, commandParameters);
-            }
-            catch (CommunicationException ex)
-            {
-                throw new MtConnectionException(ex.Message, ex);
-            }
+            var res = SendCommand<string>(MtCommandType.MtRequest, commandParameters);
 
             if (res == null)
             {
                 throw new MtExecutionException(MtErrorCode.MtApiCustomError, "Response from MetaTrader is null");
             }
 
-            var response = JsonConvert.DeserializeObject<T>(res.Value);
+            var response = JsonConvert.DeserializeObject<T>(res);
             if (response.ErrorCode != 0)
             {
                 throw new MtExecutionException((MtErrorCode)response.ErrorCode, response.ErrorMessage);
@@ -1568,74 +2371,72 @@ namespace MtApi
             return response;
         }
 
-        private void mClient_QuoteUpdated(MTApiService.MtQuote quote)
+        private void _client_QuoteUpdated(MTApiService.MtQuote quote)
         {
             if (quote != null)
             {
-                if (IsBacktestingMode)
-                {
-                    QuoteUpdated?.Invoke(this, quote.Instrument, quote.Bid, quote.Ask);
-                }                    
-                else
-                {
-                    QuoteUpdated.FireEventAsync(this, quote.Instrument, quote.Bid, quote.Ask);
-                }                
+                QuoteUpdate?.Invoke(this, new MtQuoteEventArgs(new MtQuote(quote)));
+                QuoteUpdated?.Invoke(this, quote.Instrument, quote.Bid, quote.Ask);
             }
         }
 
-        private void mClient_ServerDisconnected(object sender, EventArgs e)
+        private void _client_ServerDisconnected(object sender, EventArgs e)
         {
-            UpdateConnectionState(MtConnectionState.Disconnected, "MtApi is disconnected");
+            Disconnect(false);
         }
 
-        private void mClient_ServerFailed(object sender, EventArgs e)
+        private void _client_ServerFailed(object sender, EventArgs e)
         {
-            UpdateConnectionState(MtConnectionState.Failed, "Failed connection with MtApi");
+            Disconnect(true);
         }
 
-        private void mClient_QuoteRemoved(MTApiService.MtQuote quote)
+        private void _client_QuoteRemoved(MTApiService.MtQuote quote)
         {
-            QuoteRemoved.FireEventAsync(this, new MtQuoteEventArgs(quote.Convert()));
+            QuoteRemoved?.Invoke(this, new MtQuoteEventArgs(new MtQuote(quote)));
         }
 
-        private void mClient_QuoteAdded(MTApiService.MtQuote quote)
+        private void _client_QuoteAdded(MTApiService.MtQuote quote)
         {
-            QuoteAdded.FireEventAsync(this, new MtQuoteEventArgs(quote.Convert()));
+            QuoteAdded?.Invoke(this, new MtQuoteEventArgs(new MtQuote(quote)));
         }
 
-        private void _client_MtEventReceived(object sender, MtEventArgs e)
+        private void _client_MtEventReceived(MtEvent e)
         {
-            MtEventTypes eventType = (MtEventTypes) e.Event.EventType;
+            var eventType = (MtEventTypes) e.EventType;
 
             switch(eventType)
             {
                 case MtEventTypes.LastTimeBar:
                     {
-                        FireOnLastTimeBar(JsonConvert.DeserializeObject<MtTimeBar>(e.Event.Payload));
+                        FireOnLastTimeBar(JsonConvert.DeserializeObject<MtTimeBar>(e.Payload));
                     }
                     break;
+                default:
+                    throw new ArgumentOutOfRangeException();
             }
         }
 
         private void FireOnLastTimeBar(MtTimeBar timeBar)
         {
-            OnLastTimeBar.FireEventAsync(this, new TimeBarArgs(timeBar));
+            OnLastTimeBar?.Invoke(this, new TimeBarArgs(timeBar));
+        }
+
+        private void BacktestingReady()
+        {
+            SendCommand<object>(MtCommandType.BacktestingReady, null);
         }
 
         #endregion
 
         #region Events
+
         public event MtApiQuoteHandler QuoteUpdated;
+        public event EventHandler<MtQuoteEventArgs> QuoteUpdate;
         public event EventHandler<MtQuoteEventArgs> QuoteAdded;
         public event EventHandler<MtQuoteEventArgs> QuoteRemoved;
         public event EventHandler<MtConnectionEventArgs> ConnectionStateChanged;
         public event EventHandler<TimeBarArgs> OnLastTimeBar;
-        #endregion
 
-        #region Private Fields
-        private readonly MtClient _client = new MtClient();
-        private readonly object _locker = new object();
-        private MtConnectionState _connectionState = MtConnectionState.Disconnected;
         #endregion
     }
 }

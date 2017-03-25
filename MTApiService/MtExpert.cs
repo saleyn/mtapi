@@ -1,25 +1,161 @@
 ﻿using System;
+using log4net;
+using System.Collections.Generic;
 
 namespace MTApiService
 {
-    public class MtExpert
+    internal class MtExpert: ITaskExecutor
     {
         public delegate void MtQuoteHandler(MtExpert expert, MtQuote quote);
+        public delegate void MtEventHandler(MtExpert expert, MtEvent e);
+
+        #region Private Fields
+        private static readonly ILog Log = LogManager.GetLogger(typeof(MtExpert));
+
+        private readonly IMetaTraderHandler _mtHadler;
+        private MtCommandTask _currentTask;
+        private readonly Queue<MtCommandTask> _taskQueue = new Queue<MtCommandTask>();
+        private readonly object _locker = new object();
+        #endregion
+
+        #region Public Methods
+        public MtExpert(int handle, MtQuote quote, IMetaTraderHandler mtHandler)
+        {
+            if (mtHandler == null)
+                throw new ArgumentNullException(nameof(mtHandler));
+
+            Quote = quote;
+            Handle = handle;
+            _mtHadler = mtHandler;
+        }
+
+        public void Deinit()
+        {
+            Log.Debug("Deinit: begin.");
+
+            IsEnable = false;
+            FireOnDeinited();
+
+            Log.Debug("Deinit: end.");
+        }
+
+        public void SendResponse(MtResponse response)
+        {
+            Log.DebugFormat("SendResponse: begin. response = {0}", response);
+
+            _currentTask.SetResult(response);
+            _currentTask = null;
+
+            Log.Debug("SendResponse: end.");
+        }
+
+        public int GetCommandType()
+        {
+            Log.Debug("GetCommandType: called.");
+
+            _currentTask = DequeueTask();
+
+            return _currentTask?.Command?.CommandType ?? 0;
+        }
+
+        public object GetCommandParameter(int index)
+        {
+            Log.DebugFormat("GetCommandParameter: called. index = {0}", index);
+
+            var command = _currentTask?.Command;
+            if (command?.Parameters != null && index >= 0 && index < command.Parameters.Count)
+            {
+                return command.Parameters[index];
+            }
+
+            return null;
+        }
+
+        public object GetNamedParameter(string name)
+        {
+            Log.DebugFormat("GetNamedParameter: called. name = {0}", name);
+
+            var command = _currentTask?.Command;
+            if (command == null)
+            {
+                Log.Warn("GetNamedParameter: command is not defined in task.");
+                return null;
+            }
+
+            if (command.NamedParams == null)
+            {
+                Log.Warn("GetNamedParameter: NamedParams is not defined in command.");
+                return null;
+            }
+
+            return command.NamedParams[name];
+        }
+
+        public bool ContainsNamedParameter(string name)
+        {
+            Log.DebugFormat("ContainsNamedParameter: called. name = {0}", name);
+
+            var command = _currentTask?.Command;
+            if (command == null)
+            {
+                Log.Warn("ContainsNamedParameter: command is not defined in task.");
+                return false;
+            }
+
+            if (command.NamedParams == null)
+            {
+                Log.Warn("ContainsNamedParameter: NamedParams is not defined in command.");
+                return false;
+            }
+
+            return command.NamedParams.ContainsKey(name);
+        }
+
+        public void SendEvent(MtEvent mtEvent)
+        {
+            Log.DebugFormat("SendEvent: begin. event = {0}", mtEvent);
+
+            FireOnMtEvent(mtEvent);
+
+            Log.Debug("SendEvent: end.");
+        }
+
+        public override string ToString()
+        {
+            return $"ExpertHandle = {Handle}";
+        }
+
+        #endregion
+
+        #region ITaskExecutor
+
+        public void Execute(MtCommandTask task)
+        {
+            lock (_taskQueue)
+            {
+                _taskQueue.Enqueue(task);
+            }
+
+            NotifyCommandReady();
+        }
+
+        #endregion
 
         #region Properties
+
         private MtQuote _quote;
-        public MtQuote Quote 
+        public MtQuote Quote
         {
             get
             {
                 lock (_locker)
                 {
-                    return _quote;                         
+                    return _quote;
                 }
             }
             set
             {
-                lock(_locker)
+                lock (_locker)
                 {
                     _quote = value;
                 }
@@ -28,7 +164,7 @@ namespace MTApiService
             }
         }
 
-        public int Handle { get; private set; }
+        public int Handle { get; }
 
         private bool _isEnable = true;
         public bool IsEnable
@@ -49,93 +185,34 @@ namespace MTApiService
             }
         }
 
-        public ICommandManager CommandManager
-        {
-            private get
-            {
-                lock (_locker)
-                {
-                    return _commandManager;
-                }
-            }
-            set
-            {
-                lock (_locker)
-                {
-                    _commandManager = value;
-                }
-            }
-        }
-
-        #endregion
-
-        #region Public Methods
-        public MtExpert(int handle, MtQuote quote, IMetaTraderHandler mtHandler)
-        {
-            Quote = quote;
-            Handle = handle;
-            _mtHadler = mtHandler;
-        }
-
-        public void Deinit()
-        {
-            IsEnable = false;
-            FireOnDeinited();
-        }
-
-        public void SendResponse(MtResponse response)
-        {
-            _commandTask.SetResult(response);
-            _commandTask = null;
-            FireOnCommandExecuted();
-        }
-
-        public int GetCommandType()
-        {
-            var commandManager = CommandManager;
-            if (commandManager != null)
-            {
-                _commandTask = commandManager.DequeueCommandTask();
-            }
-
-            return _commandTask != null && _commandTask.Command != null ? _commandTask.Command.CommandType : 0;
-        }
-
-        public object GetCommandParameter(int index)
-        {
-            if (_commandTask != null)
-            {
-                var command = _commandTask.Command;
-                if (command != null && command.Parameters != null
-                    && index >= 0 && index < command.Parameters.Count)
-                {
-                    return command.Parameters[index];
-                }
-            }
-
-            return null;
-        }
-
-        public void SendEvent(MtEvent mtEvent)
-        {
-            FireOnMtEvent(mtEvent);
-        }
-        #endregion
-
-        #region IMtCommandExecutor
-        public void NotifyCommandReady()
-        {
-            SendTickToMetaTrader();
-        }
         #endregion
 
         #region Private Methods
-        private void SendTickToMetaTrader()
+        private MtCommandTask DequeueTask()
         {
-            if (_mtHadler != null)
+            Log.Debug("DequeueTask: called.");
+
+            MtCommandTask task;
+            int count;
+
+            lock (_locker)
             {
-                _mtHadler.SendTickToMetaTrader(Handle);
+                count = _taskQueue.Count;
+                task = _taskQueue.Count > 0 ? _taskQueue.Dequeue() : null;
             }
+
+            Log.DebugFormat("DequeueTask: end. left task count = {0}.", count);
+
+            return task;
+        }
+
+        private void NotifyCommandReady()
+        {
+            Log.Debug("NotifyCommandReady: begin.");
+
+            _mtHadler.SendTickToMetaTrader(Handle);
+
+            Log.Debug("NotifyCommandReady: end.");
         }
 
         private void FireOnQuoteChanged(MtQuote quote)
@@ -148,29 +225,16 @@ namespace MTApiService
             Deinited?.Invoke(this, EventArgs.Empty);
         }
 
-        private void FireOnCommandExecuted()
-        {
-            CommandExecuted?.Invoke(this, EventArgs.Empty);
-        }
-
         private void FireOnMtEvent(MtEvent mtEvent)
         {
-            OnMtEvent?.Invoke(this, new MtEventArgs(mtEvent));
+            OnMtEvent?.Invoke(this, mtEvent);
         }
         #endregion
 
         #region Events
         public event EventHandler Deinited;
         public event MtQuoteHandler QuoteChanged;
-        public event EventHandler CommandExecuted;
-        public event EventHandler<MtEventArgs> OnMtEvent;
-        #endregion
-
-        #region Private Fields
-        private readonly IMetaTraderHandler _mtHadler;
-        private MtCommandTask _commandTask;
-        private ICommandManager _commandManager;
-        private readonly object _locker = new object();
+        public event MtEventHandler OnMtEvent;
         #endregion
     }
 }

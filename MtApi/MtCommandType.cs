@@ -1,9 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-
-namespace MtApi
+﻿namespace MtApi
 {
     enum MtCommandType
     {
@@ -58,9 +53,15 @@ namespace MtApi
         IsVisualMode                        = 37,
         UninitializeReason                  = 38,
         ErrorDescription                    = 39,
+        TerminalCompany                     = 68,
+        TerminalName                        = 69,
+        TerminalPath                        = 70,
+        TerminalInfoString                  = 153,
+        TerminalInfoInteger                 = 204,
+        TerminalInfoDouble                  = 205,
 
         //Account Information
-        AccountBalance                      = 40,
+        AccountBalance = 40,
         AccountCredit                       = 41,
         AccountCompany                      = 42,
         AccountCurrency                     = 43,
@@ -90,11 +91,6 @@ namespace MtApi
         SendFTPA                            = 65,
         SendMail                            = 66,
         Sleep                               = 67,
-
-        //Client Terminal
-        TerminalCompany                     = 68,
-        TerminalName                        = 69,
-        TerminalPath                        = 70,
 
         //Date and Time
         Day                                 = 71,
@@ -139,8 +135,8 @@ namespace MtApi
         iBullsPower                         = 106,
         iCCI                                = 107,
         iCCIOnArray                         = 108,
-        iCustom                             = 109,
-        iCustom_d                           = 10109,
+        //iCustom                             = 109,
+        //iCustom_d                           = 10109,
         iDeMarker                           = 110,
         iEnvelopes                          = 111,
         iEnvelopesOnArray                   = 112,
@@ -188,13 +184,49 @@ namespace MtApi
         //
         RefreshRates                        = 150,
         //
-        TerminalInfoString                  = 153,
-        SymbolInfoString                    = 154,
 
         //Requests
         MtRequest                           = 155,
 
         //Backtesting
-        BacktestingReady                    = 156
+        BacktestingReady                    = 156,
+
+        //Market Info
+        SymbolInfoString                    = 154,
+        SymbolsTotal                        = 200,
+        SymbolName                          = 201,
+        SymbolSelect                        = 202,
+        SymbolInfoInteger                   = 203,
+        ChartId                             = 206,
+        ChartRedraw                         = 207,
+
+        //Object Functions
+        ObjectCreate                        = 208,
+        ObjectName                          = 209,
+        ObjectDelete                        = 210,
+        ObjectsDeleteAll                    = 211,
+        ObjectFind                          = 212,
+        ObjectGetTimeByValue                = 213,
+        ObjectGetValueByTime                = 214,
+        ObjectMove                          = 215,
+        ObjectsTotal                        = 216,
+        ObjectGetDouble                     = 217,
+        ObjectGetInteger                    = 218,
+        ObjectGetString                     = 219,
+        ObjectSetDouble                     = 220,
+        ObjectSetInteger                    = 221,
+        ObjectSetString                     = 222,
+        TextSetFont                         = 223,
+        TextOut                             = 224,
+        TextGetSize                         = 225,
+        ObjectDescription                   = 226,
+        ObjectGet                           = 227,
+        ObjectGetFiboDescription            = 228,
+        ObjectGetShiftByValue               = 229,
+        ObjectGetValueByShift               = 230,
+        ObjectSet                           = 231,
+        ObjectSetFiboDescription            = 232,
+        ObjectSetText                       = 233,
+        ObjectType                          = 234
     }
 }

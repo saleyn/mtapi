@@ -59,9 +59,20 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="ChartPeriod.cs" />
-    <Compile Include="ExtensionMethods.cs" />
+    <Compile Include="EnumColorFormat.cs" />
+    <Compile Include="EnumObject.cs" />
+    <Compile Include="EnumObjectPropertyDouble.cs" />
+    <Compile Include="EnumObjectPropertyInteger.cs" />
+    <Compile Include="EnumObjectPropertyString.cs" />
+    <Compile Include="EnumSeriesInfoInteger.cs" />
+    <Compile Include="EnumSymbolInfoDouble.cs" />
+    <Compile Include="EnumSymbolInfoInteger.cs" />
+    <Compile Include="EnumTerminalInfoDouble.cs" />
+    <Compile Include="EnumTerminalInfoInteger.cs" />
+    <Compile Include="FlagFontStyle.cs" />
     <Compile Include="Monitors\AvailabilityOrdersEventArgs.cs" />
     <Compile Include="MqlRates.cs" />
+    <Compile Include="MqlTick.cs" />
     <Compile Include="MtConnectionEventArgs.cs" />
     <Compile Include="MtConnectionException.cs" />
     <Compile Include="MtConnectionState.cs" />
@@ -72,6 +83,7 @@
     <Compile Include="MtOrder.cs" />
     <Compile Include="MtQuote.cs" />
     <Compile Include="MtQuoteEventArgs.cs" />
+    <Compile Include="MtSession.cs" />
     <Compile Include="MtTimeBar.cs" />
     <Compile Include="MtTypes.cs" />
     <Compile Include="Monitors\TradeMonitor.cs" />
@@ -90,14 +102,22 @@
     <Compile Include="Requests\OrderDeleteRequest.cs" />
     <Compile Include="Requests\OrderModifyRequest.cs" />
     <Compile Include="Requests\OrderSendRequest.cs" />
+    <Compile Include="Requests\SeriesInfoIntegerRequest.cs" />
+    <Compile Include="Requests\SessionRequest.cs" />
     <Compile Include="Requests\RequestBase.cs" />
     <Compile Include="Requests\RequestType.cs" />
+    <Compile Include="Requests\SymbolInfoDoubleRequest.cs" />
+    <Compile Include="Requests\SymbolInfoTickRequest.cs" />
     <Compile Include="Responses\CopyRatesResponse.cs" />
     <Compile Include="Responses\GetOrderResponse.cs" />
     <Compile Include="Responses\GetOrdersResponse.cs" />
     <Compile Include="Responses\ICustomResponse.cs" />
     <Compile Include="Responses\OrderSendResponse.cs" />
+    <Compile Include="Responses\SeriesInfoIntegerResponse.cs" />
+    <Compile Include="Responses\SessionResponse.cs" />
     <Compile Include="Responses\ResponseBase.cs" />
+    <Compile Include="Responses\SymbolInfoDoubleResponse.cs" />
+    <Compile Include="Responses\SymbolInfoTickResponse.cs" />
     <Compile Include="SeriesIdentifier.cs" />
     <Compile Include="TimeBarArgs.cs" />
     <Compile Include="Monitors\TimeframeTradeMonitor.cs" />
