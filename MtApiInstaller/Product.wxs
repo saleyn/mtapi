@@ -4,7 +4,7 @@
     <?define ProductVersion="1.0.30" ?>
     <?define Manufacturer="DW"?>
     <?define ProductPath="..\build\products\$(var.Configuration)\"?>
-  
+
 	<Product Id="*" 
            Name="$(var.ProductName) $(var.ProductVersion)" 
            Language="1033" 

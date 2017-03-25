@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.Windows.Forms;
 using MtApi;
 using System.Threading.Tasks;
@@ -734,8 +735,8 @@ namespace TestApiClientUI
             listBoxProceHistory.DataSource = openPriceList;
 
             Console.WriteLine("Finished time: " + DateTime.Now.ToString());
-
-            using (System.IO.StreamWriter file = new System.IO.StreamWriter("d:\\test.txt"))
+            var outFile = Path.Combine(Path.GetTempPath(), "test.txt");
+            using (System.IO.StreamWriter file = new System.IO.StreamWriter(outFile))
             {
                 foreach (var value in openPriceList)
                 {
