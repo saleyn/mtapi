@@ -58,7 +58,12 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="ChartEventArgs.cs" />
     <Compile Include="ChartPeriod.cs" />
+    <Compile Include="EnumAlignMode.cs" />
+    <Compile Include="EnumChartPropertyDouble.cs" />
+    <Compile Include="EnumChartPropertyInteger.cs" />
+    <Compile Include="EnumChartPropertyString.cs" />
     <Compile Include="EnumColorFormat.cs" />
     <Compile Include="EnumObject.cs" />
     <Compile Include="EnumObjectPropertyDouble.cs" />
@@ -73,6 +78,7 @@
     <Compile Include="Monitors\AvailabilityOrdersEventArgs.cs" />
     <Compile Include="MqlRates.cs" />
     <Compile Include="MqlTick.cs" />
+    <Compile Include="MtChartEvent.cs" />
     <Compile Include="MtConnectionEventArgs.cs" />
     <Compile Include="MtConnectionException.cs" />
     <Compile Include="MtConnectionState.cs" />

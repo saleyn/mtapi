@@ -1,20 +1,17 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
+﻿// ReSharper disable InconsistentNaming
 
 namespace MtApi5
 {
     public class MqlTradeCheckResult
     {
-        public uint Retcode { get; private set; }             // Reply code
-        public double Balance { get; private set; }             // Balance after the execution of the deal
-        public double Equity { get; private set; }              // Equity after the execution of the deal
-        public double Profit { get; private set; }              // Floating profit
-        public double Margin { get; private set; }              // Margin requirements
-        public double Margin_free { get; private set; }         // Free margin
-        public double Margin_level { get; private set; }        // Margin level
-        public string Comment { get; private set; }             // Comment to the reply code (description of the error)
+        public uint Retcode { get; set; }               // Reply code
+        public double Balance { get; set; }             // Balance after the execution of the deal
+        public double Equity { get; set; }              // Equity after the execution of the deal
+        public double Profit { get; set; }              // Floating profit
+        public double Margin { get; set; }              // Margin requirements
+        public double Margin_free { get; set; }         // Free margin
+        public double Margin_level { get; set; }        // Margin level
+        public string Comment { get; set; }             // Comment to the reply code (description of the error)
 
         public MqlTradeCheckResult(uint retcode
             , double balance
@@ -33,6 +30,14 @@ namespace MtApi5
             Margin_free = margin_free;
             Margin_level = margin_level;
             Comment = comment;
+        }
+
+        public MqlTradeCheckResult()
+        { }
+
+        public override string ToString()
+        {
+            return $"Retcode={Retcode}; Comment={Comment}; Balance={Balance}; Equity={Equity}; Profit={Profit}; Margin={Margin}; Margin_free={Margin_free}; Margin_level={Margin_level}";
         }
     }
 }

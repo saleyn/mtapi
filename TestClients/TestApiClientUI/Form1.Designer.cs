@@ -113,6 +113,13 @@
             this.label22 = new System.Windows.Forms.Label();
             this.textBoxErrorCode = new System.Windows.Forms.TextBox();
             this.tabPage3 = new System.Windows.Forms.TabPage();
+            this.button70 = new System.Windows.Forms.Button();
+            this.label33 = new System.Windows.Forms.Label();
+            this.label32 = new System.Windows.Forms.Label();
+            this.label31 = new System.Windows.Forms.Label();
+            this.textBoxAccountHost = new System.Windows.Forms.TextBox();
+            this.textBoxAccountPassword = new System.Windows.Forms.TextBox();
+            this.textBoxAccountLogin = new System.Windows.Forms.TextBox();
             this.button67 = new System.Windows.Forms.Button();
             this.button66 = new System.Windows.Forms.Button();
             this.button65 = new System.Windows.Forms.Button();
@@ -136,6 +143,8 @@
             this.label23 = new System.Windows.Forms.Label();
             this.textBoxAccountInfoSymbol = new System.Windows.Forms.TextBox();
             this.tabPage4 = new System.Windows.Forms.TabPage();
+            this.comboBox12 = new System.Windows.Forms.ComboBox();
+            this.button72 = new System.Windows.Forms.Button();
             this.button36 = new System.Windows.Forms.Button();
             this.comboBox10 = new System.Windows.Forms.ComboBox();
             this.comboBox9 = new System.Windows.Forms.ComboBox();
@@ -182,6 +191,7 @@
             this.button14 = new System.Windows.Forms.Button();
             this.button13 = new System.Windows.Forms.Button();
             this.tabPage7 = new System.Windows.Forms.TabPage();
+            this.button71 = new System.Windows.Forms.Button();
             this.button23 = new System.Windows.Forms.Button();
             this.iCustomBtn = new System.Windows.Forms.Button();
             this.tabPage8 = new System.Windows.Forms.TabPage();
@@ -197,9 +207,12 @@
             this.button38 = new System.Windows.Forms.Button();
             this.button37 = new System.Windows.Forms.Button();
             this.tabPage10 = new System.Windows.Forms.TabPage();
+            this.button68 = new System.Windows.Forms.Button();
             this.comboBox11 = new System.Windows.Forms.ComboBox();
             this.button4 = new System.Windows.Forms.Button();
-            this.button68 = new System.Windows.Forms.Button();
+            this.tabPage11 = new System.Windows.Forms.TabPage();
+            this.button69 = new System.Windows.Forms.Button();
+            this.button73 = new System.Windows.Forms.Button();
             this.groupBox1.SuspendLayout();
             this.statusStrip1.SuspendLayout();
             this.groupBox2.SuspendLayout();
@@ -218,6 +231,7 @@
             this.tabPage8.SuspendLayout();
             this.tabPage9.SuspendLayout();
             this.tabPage10.SuspendLayout();
+            this.tabPage11.SuspendLayout();
             this.SuspendLayout();
             // 
             // textBoxServerName
@@ -240,7 +254,7 @@
             this.buttonConnect.Location = new System.Drawing.Point(17, 73);
             this.buttonConnect.Name = "buttonConnect";
             this.buttonConnect.Size = new System.Drawing.Size(75, 23);
-            this.buttonConnect.TabIndex = 4;
+            this.buttonConnect.TabIndex = 2;
             this.buttonConnect.Text = "Connect";
             this.buttonConnect.UseVisualStyleBackColor = true;
             this.buttonConnect.Click += new System.EventHandler(this.buttonConnect_Click);
@@ -322,7 +336,7 @@
             this.checkBox2.Location = new System.Drawing.Point(6, 296);
             this.checkBox2.Name = "checkBox2";
             this.checkBox2.Size = new System.Drawing.Size(281, 17);
-            this.checkBox2.TabIndex = 16;
+            this.checkBox2.TabIndex = 5;
             this.checkBox2.Text = "Use selected ExpertHandle (chart) as default executor";
             this.checkBox2.UseVisualStyleBackColor = true;
             this.checkBox2.CheckedChanged += new System.EventHandler(this.checkBox2_CheckedChanged);
@@ -343,7 +357,7 @@
             this.listViewQuotes.MultiSelect = false;
             this.listViewQuotes.Name = "listViewQuotes";
             this.listViewQuotes.Size = new System.Drawing.Size(292, 271);
-            this.listViewQuotes.TabIndex = 15;
+            this.listViewQuotes.TabIndex = 4;
             this.listViewQuotes.UseCompatibleStateImageBehavior = false;
             this.listViewQuotes.View = System.Windows.Forms.View.Details;
             this.listViewQuotes.SelectedIndexChanged += new System.EventHandler(this.listViewQuotes_SelectedIndexChanged);
@@ -400,6 +414,7 @@
             this.tabControl1.Controls.Add(this.tabPage8);
             this.tabControl1.Controls.Add(this.tabPage9);
             this.tabControl1.Controls.Add(this.tabPage10);
+            this.tabControl1.Controls.Add(this.tabPage11);
             this.tabControl1.Location = new System.Drawing.Point(324, 12);
             this.tabControl1.Multiline = true;
             this.tabControl1.Name = "tabControl1";
@@ -442,7 +457,7 @@
             this.button22.Location = new System.Drawing.Point(216, 293);
             this.button22.Name = "button22";
             this.button22.Size = new System.Drawing.Size(75, 23);
-            this.button22.TabIndex = 19;
+            this.button22.TabIndex = 31;
             this.button22.Text = "OrderModify";
             this.button22.UseVisualStyleBackColor = true;
             this.button22.Click += new System.EventHandler(this.button22_Click);
@@ -452,7 +467,7 @@
             this.button21.Location = new System.Drawing.Point(216, 264);
             this.button21.Name = "button21";
             this.button21.Size = new System.Drawing.Size(75, 23);
-            this.button21.TabIndex = 18;
+            this.button21.TabIndex = 30;
             this.button21.Text = "OrderDelete";
             this.button21.UseVisualStyleBackColor = true;
             this.button21.Click += new System.EventHandler(this.button21_Click);
@@ -471,7 +486,7 @@
             this.textBoxOppositeTicket.Location = new System.Drawing.Point(303, 239);
             this.textBoxOppositeTicket.Name = "textBoxOppositeTicket";
             this.textBoxOppositeTicket.Size = new System.Drawing.Size(100, 20);
-            this.textBoxOppositeTicket.TabIndex = 16;
+            this.textBoxOppositeTicket.TabIndex = 28;
             this.textBoxOppositeTicket.Text = "0";
             // 
             // button15
@@ -479,7 +494,7 @@
             this.button15.Location = new System.Drawing.Point(410, 237);
             this.button15.Name = "button15";
             this.button15.Size = new System.Drawing.Size(92, 23);
-            this.button15.TabIndex = 15;
+            this.button15.TabIndex = 29;
             this.button15.Text = "OrderCloseBy";
             this.button15.UseVisualStyleBackColor = true;
             this.button15.Click += new System.EventHandler(this.button15_Click);
@@ -490,7 +505,7 @@
             this.checkBox1.Location = new System.Drawing.Point(297, 208);
             this.checkBox1.Name = "checkBox1";
             this.checkBox1.Size = new System.Drawing.Size(205, 17);
-            this.checkBox1.TabIndex = 14;
+            this.checkBox1.TabIndex = 27;
             this.checkBox1.Text = "Close order by current price on market";
             this.checkBox1.UseVisualStyleBackColor = true;
             // 
@@ -499,7 +514,7 @@
             this.button20.Location = new System.Drawing.Point(216, 202);
             this.button20.Name = "button20";
             this.button20.Size = new System.Drawing.Size(75, 23);
-            this.button20.TabIndex = 13;
+            this.button20.TabIndex = 26;
             this.button20.Text = "OrderClose";
             this.button20.UseVisualStyleBackColor = true;
             this.button20.Click += new System.EventHandler(this.button20_Click);
@@ -509,7 +524,7 @@
             this.button17.Location = new System.Drawing.Point(558, 158);
             this.button17.Name = "button17";
             this.button17.Size = new System.Drawing.Size(75, 23);
-            this.button17.TabIndex = 12;
+            this.button17.TabIndex = 25;
             this.button17.Text = "GetOrders";
             this.button17.UseVisualStyleBackColor = true;
             this.button17.Click += new System.EventHandler(this.button17_Click);
@@ -524,7 +539,7 @@
             this.comboBox2.Location = new System.Drawing.Point(341, 158);
             this.comboBox2.Name = "comboBox2";
             this.comboBox2.Size = new System.Drawing.Size(114, 21);
-            this.comboBox2.TabIndex = 11;
+            this.comboBox2.TabIndex = 23;
             // 
             // comboBox1
             // 
@@ -536,14 +551,14 @@
             this.comboBox1.Location = new System.Drawing.Point(216, 158);
             this.comboBox1.Name = "comboBox1";
             this.comboBox1.Size = new System.Drawing.Size(119, 21);
-            this.comboBox1.TabIndex = 10;
+            this.comboBox1.TabIndex = 22;
             // 
             // button16
             // 
             this.button16.Location = new System.Drawing.Point(461, 158);
             this.button16.Name = "button16";
             this.button16.Size = new System.Drawing.Size(75, 23);
-            this.button16.TabIndex = 9;
+            this.button16.TabIndex = 24;
             this.button16.Text = "GetOrder";
             this.button16.UseVisualStyleBackColor = true;
             this.button16.Click += new System.EventHandler(this.button16_Click);
@@ -562,7 +577,7 @@
             this.textBoxIndexTicket.Location = new System.Drawing.Point(290, 132);
             this.textBoxIndexTicket.Name = "textBoxIndexTicket";
             this.textBoxIndexTicket.Size = new System.Drawing.Size(109, 20);
-            this.textBoxIndexTicket.TabIndex = 7;
+            this.textBoxIndexTicket.TabIndex = 21;
             this.textBoxIndexTicket.Text = "0";
             // 
             // comboBoxSelectedCommand
@@ -596,7 +611,7 @@
             this.comboBoxSelectedCommand.Location = new System.Drawing.Point(213, 344);
             this.comboBoxSelectedCommand.Name = "comboBoxSelectedCommand";
             this.comboBoxSelectedCommand.Size = new System.Drawing.Size(121, 21);
-            this.comboBoxSelectedCommand.TabIndex = 6;
+            this.comboBoxSelectedCommand.TabIndex = 32;
             // 
             // label15
             // 
@@ -624,14 +639,14 @@
             this.listBoxClosedOrders.Location = new System.Drawing.Point(213, 85);
             this.listBoxClosedOrders.Name = "listBoxClosedOrders";
             this.listBoxClosedOrders.Size = new System.Drawing.Size(419, 43);
-            this.listBoxClosedOrders.TabIndex = 5;
+            this.listBoxClosedOrders.TabIndex = 20;
             // 
             // button2
             // 
             this.button2.Location = new System.Drawing.Point(356, 342);
             this.button2.Name = "button2";
             this.button2.Size = new System.Drawing.Size(87, 23);
-            this.button2.TabIndex = 2;
+            this.button2.TabIndex = 33;
             this.button2.Text = "Execute";
             this.button2.UseVisualStyleBackColor = true;
             this.button2.Click += new System.EventHandler(this.button2_Click);
@@ -675,7 +690,7 @@
             this.button19.Location = new System.Drawing.Point(87, 336);
             this.button19.Name = "button19";
             this.button19.Size = new System.Drawing.Size(75, 23);
-            this.button19.TabIndex = 15;
+            this.button19.TabIndex = 18;
             this.button19.Text = "Sell";
             this.button19.UseVisualStyleBackColor = true;
             this.button19.Click += new System.EventHandler(this.button19_Click);
@@ -685,7 +700,7 @@
             this.button18.Location = new System.Drawing.Point(6, 336);
             this.button18.Name = "button18";
             this.button18.Size = new System.Drawing.Size(75, 23);
-            this.button18.TabIndex = 14;
+            this.button18.TabIndex = 17;
             this.button18.Text = "Buy";
             this.button18.UseVisualStyleBackColor = true;
             this.button18.Click += new System.EventHandler(this.button18_Click);
@@ -700,28 +715,28 @@
             this.comboBoxOrderColor.Location = new System.Drawing.Point(69, 281);
             this.comboBoxOrderColor.Name = "comboBoxOrderColor";
             this.comboBoxOrderColor.Size = new System.Drawing.Size(121, 21);
-            this.comboBoxOrderColor.TabIndex = 13;
+            this.comboBoxOrderColor.TabIndex = 15;
             // 
             // textBox2
             // 
             this.textBox2.Location = new System.Drawing.Point(70, 255);
             this.textBox2.Name = "textBox2";
             this.textBox2.Size = new System.Drawing.Size(120, 20);
-            this.textBox2.TabIndex = 11;
+            this.textBox2.TabIndex = 14;
             // 
             // textBoxOrderMagic
             // 
             this.textBoxOrderMagic.Location = new System.Drawing.Point(70, 229);
             this.textBoxOrderMagic.Name = "textBoxOrderMagic";
             this.textBoxOrderMagic.Size = new System.Drawing.Size(120, 20);
-            this.textBoxOrderMagic.TabIndex = 11;
+            this.textBoxOrderMagic.TabIndex = 13;
             // 
             // textBoxOrderComment
             // 
             this.textBoxOrderComment.Location = new System.Drawing.Point(70, 203);
             this.textBoxOrderComment.Name = "textBoxOrderComment";
             this.textBoxOrderComment.Size = new System.Drawing.Size(120, 20);
-            this.textBoxOrderComment.TabIndex = 11;
+            this.textBoxOrderComment.TabIndex = 12;
             // 
             // textBoxOrderProffit
             // 
@@ -878,7 +893,7 @@
             this.button1.Location = new System.Drawing.Point(120, 307);
             this.button1.Name = "button1";
             this.button1.Size = new System.Drawing.Size(75, 23);
-            this.button1.TabIndex = 12;
+            this.button1.TabIndex = 16;
             this.button1.Text = "Send";
             this.button1.UseVisualStyleBackColor = true;
             this.button1.Click += new System.EventHandler(this.button1_Click);
@@ -909,7 +924,7 @@
             this.listBoxSendedOrders.Name = "listBoxSendedOrders";
             this.listBoxSendedOrders.SelectionMode = System.Windows.Forms.SelectionMode.MultiSimple;
             this.listBoxSendedOrders.Size = new System.Drawing.Size(419, 43);
-            this.listBoxSendedOrders.TabIndex = 1;
+            this.listBoxSendedOrders.TabIndex = 19;
             // 
             // tabPage1
             // 
@@ -1106,6 +1121,13 @@
             // 
             // tabPage3
             // 
+            this.tabPage3.Controls.Add(this.button70);
+            this.tabPage3.Controls.Add(this.label33);
+            this.tabPage3.Controls.Add(this.label32);
+            this.tabPage3.Controls.Add(this.label31);
+            this.tabPage3.Controls.Add(this.textBoxAccountHost);
+            this.tabPage3.Controls.Add(this.textBoxAccountPassword);
+            this.tabPage3.Controls.Add(this.textBoxAccountLogin);
             this.tabPage3.Controls.Add(this.button67);
             this.tabPage3.Controls.Add(this.button66);
             this.tabPage3.Controls.Add(this.button65);
@@ -1135,6 +1157,64 @@
             this.tabPage3.TabIndex = 3;
             this.tabPage3.Text = "Account Information";
             this.tabPage3.UseVisualStyleBackColor = true;
+            // 
+            // button70
+            // 
+            this.button70.Location = new System.Drawing.Point(371, 292);
+            this.button70.Name = "button70";
+            this.button70.Size = new System.Drawing.Size(97, 23);
+            this.button70.TabIndex = 18;
+            this.button70.Text = "ChangeAccount";
+            this.button70.UseVisualStyleBackColor = true;
+            this.button70.Click += new System.EventHandler(this.button70_Click);
+            // 
+            // label33
+            // 
+            this.label33.AutoSize = true;
+            this.label33.Location = new System.Drawing.Point(168, 269);
+            this.label33.Name = "label33";
+            this.label33.Size = new System.Drawing.Size(66, 13);
+            this.label33.TabIndex = 17;
+            this.label33.Text = "MT4 Server:";
+            // 
+            // label32
+            // 
+            this.label32.AutoSize = true;
+            this.label32.Location = new System.Drawing.Point(168, 241);
+            this.label32.Name = "label32";
+            this.label32.Size = new System.Drawing.Size(56, 13);
+            this.label32.TabIndex = 17;
+            this.label32.Text = "Password:";
+            // 
+            // label31
+            // 
+            this.label31.AutoSize = true;
+            this.label31.Location = new System.Drawing.Point(168, 214);
+            this.label31.Name = "label31";
+            this.label31.Size = new System.Drawing.Size(36, 13);
+            this.label31.TabIndex = 17;
+            this.label31.Text = "Login:";
+            // 
+            // textBoxAccountHost
+            // 
+            this.textBoxAccountHost.Location = new System.Drawing.Point(234, 266);
+            this.textBoxAccountHost.Name = "textBoxAccountHost";
+            this.textBoxAccountHost.Size = new System.Drawing.Size(238, 20);
+            this.textBoxAccountHost.TabIndex = 17;
+            // 
+            // textBoxAccountPassword
+            // 
+            this.textBoxAccountPassword.Location = new System.Drawing.Point(234, 238);
+            this.textBoxAccountPassword.Name = "textBoxAccountPassword";
+            this.textBoxAccountPassword.Size = new System.Drawing.Size(238, 20);
+            this.textBoxAccountPassword.TabIndex = 16;
+            // 
+            // textBoxAccountLogin
+            // 
+            this.textBoxAccountLogin.Location = new System.Drawing.Point(232, 212);
+            this.textBoxAccountLogin.Name = "textBoxAccountLogin";
+            this.textBoxAccountLogin.Size = new System.Drawing.Size(238, 20);
+            this.textBoxAccountLogin.TabIndex = 15;
             // 
             // button67
             // 
@@ -1350,6 +1430,8 @@
             // 
             // tabPage4
             // 
+            this.tabPage4.Controls.Add(this.comboBox12);
+            this.tabPage4.Controls.Add(this.button72);
             this.tabPage4.Controls.Add(this.button36);
             this.tabPage4.Controls.Add(this.comboBox10);
             this.tabPage4.Controls.Add(this.comboBox9);
@@ -1372,6 +1454,25 @@
             this.tabPage4.TabIndex = 4;
             this.tabPage4.Text = "MarketInfo";
             this.tabPage4.UseVisualStyleBackColor = true;
+            // 
+            // comboBox12
+            // 
+            this.comboBox12.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
+            this.comboBox12.FormattingEnabled = true;
+            this.comboBox12.Location = new System.Drawing.Point(13, 188);
+            this.comboBox12.Name = "comboBox12";
+            this.comboBox12.Size = new System.Drawing.Size(186, 21);
+            this.comboBox12.TabIndex = 38;
+            // 
+            // button72
+            // 
+            this.button72.Location = new System.Drawing.Point(208, 186);
+            this.button72.Name = "button72";
+            this.button72.Size = new System.Drawing.Size(111, 23);
+            this.button72.TabIndex = 37;
+            this.button72.Text = "TerminalInfoString";
+            this.button72.UseVisualStyleBackColor = true;
+            this.button72.Click += new System.EventHandler(this.button72_Click);
             // 
             // button36
             // 
@@ -1767,6 +1868,7 @@
             // 
             // tabPage6
             // 
+            this.tabPage6.Controls.Add(this.button73);
             this.tabPage6.Controls.Add(this.textBoxPrint);
             this.tabPage6.Controls.Add(this.button27);
             this.tabPage6.Controls.Add(this.button14);
@@ -1781,14 +1883,14 @@
             // 
             // textBoxPrint
             // 
-            this.textBoxPrint.Location = new System.Drawing.Point(13, 86);
+            this.textBoxPrint.Location = new System.Drawing.Point(13, 108);
             this.textBoxPrint.Name = "textBoxPrint";
             this.textBoxPrint.Size = new System.Drawing.Size(386, 20);
             this.textBoxPrint.TabIndex = 3;
             // 
             // button27
             // 
-            this.button27.Location = new System.Drawing.Point(405, 84);
+            this.button27.Location = new System.Drawing.Point(405, 106);
             this.button27.Name = "button27";
             this.button27.Size = new System.Drawing.Size(75, 23);
             this.button27.TabIndex = 2;
@@ -1818,6 +1920,7 @@
             // 
             // tabPage7
             // 
+            this.tabPage7.Controls.Add(this.button71);
             this.tabPage7.Controls.Add(this.button23);
             this.tabPage7.Controls.Add(this.iCustomBtn);
             this.tabPage7.Location = new System.Drawing.Point(4, 40);
@@ -1827,6 +1930,16 @@
             this.tabPage7.TabIndex = 7;
             this.tabPage7.Text = "Technical Indicators";
             this.tabPage7.UseVisualStyleBackColor = true;
+            // 
+            // button71
+            // 
+            this.button71.Location = new System.Drawing.Point(6, 64);
+            this.button71.Name = "button71";
+            this.button71.Size = new System.Drawing.Size(107, 23);
+            this.button71.TabIndex = 17;
+            this.button71.Text = "iBarShift";
+            this.button71.UseVisualStyleBackColor = true;
+            this.button71.Click += new System.EventHandler(this.button71_Click);
             // 
             // button23
             // 
@@ -2008,6 +2121,16 @@
             this.tabPage10.Text = "Object Functions";
             this.tabPage10.UseVisualStyleBackColor = true;
             // 
+            // button68
+            // 
+            this.button68.Location = new System.Drawing.Point(6, 39);
+            this.button68.Name = "button68";
+            this.button68.Size = new System.Drawing.Size(75, 23);
+            this.button68.TabIndex = 2;
+            this.button68.Text = "ObjectName";
+            this.button68.UseVisualStyleBackColor = true;
+            this.button68.Click += new System.EventHandler(this.button68_Click);
+            // 
             // comboBox11
             // 
             this.comboBox11.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
@@ -2027,15 +2150,36 @@
             this.button4.UseVisualStyleBackColor = true;
             this.button4.Click += new System.EventHandler(this.button4_Click);
             // 
-            // button68
+            // tabPage11
             // 
-            this.button68.Location = new System.Drawing.Point(6, 39);
-            this.button68.Name = "button68";
-            this.button68.Size = new System.Drawing.Size(75, 23);
-            this.button68.TabIndex = 2;
-            this.button68.Text = "ObjectName";
-            this.button68.UseVisualStyleBackColor = true;
-            this.button68.Click += new System.EventHandler(this.button68_Click);
+            this.tabPage11.Controls.Add(this.button69);
+            this.tabPage11.Location = new System.Drawing.Point(4, 40);
+            this.tabPage11.Name = "tabPage11";
+            this.tabPage11.Padding = new System.Windows.Forms.Padding(3);
+            this.tabPage11.Size = new System.Drawing.Size(638, 383);
+            this.tabPage11.TabIndex = 11;
+            this.tabPage11.Text = "Backtesting";
+            this.tabPage11.UseVisualStyleBackColor = true;
+            // 
+            // button69
+            // 
+            this.button69.Location = new System.Drawing.Point(6, 6);
+            this.button69.Name = "button69";
+            this.button69.Size = new System.Drawing.Size(75, 23);
+            this.button69.TabIndex = 4;
+            this.button69.Text = "UnlockTicks";
+            this.button69.UseVisualStyleBackColor = true;
+            this.button69.Click += new System.EventHandler(this.button69_Click);
+            // 
+            // button73
+            // 
+            this.button73.Location = new System.Drawing.Point(13, 74);
+            this.button73.Name = "button73";
+            this.button73.Size = new System.Drawing.Size(75, 23);
+            this.button73.TabIndex = 4;
+            this.button73.Text = "TimeGMT";
+            this.button73.UseVisualStyleBackColor = true;
+            this.button73.Click += new System.EventHandler(this.button73_Click);
             // 
             // Form1
             // 
@@ -2081,6 +2225,7 @@
             this.tabPage9.ResumeLayout(false);
             this.tabPage9.PerformLayout();
             this.tabPage10.ResumeLayout(false);
+            this.tabPage11.ResumeLayout(false);
             this.ResumeLayout(false);
             this.PerformLayout();
 
@@ -2259,6 +2404,19 @@
         private System.Windows.Forms.ComboBox comboBox11;
         private System.Windows.Forms.TextBox textBoxChartId;
         private System.Windows.Forms.Button button68;
+        private System.Windows.Forms.TabPage tabPage11;
+        private System.Windows.Forms.Button button69;
+        private System.Windows.Forms.Label label33;
+        private System.Windows.Forms.Label label32;
+        private System.Windows.Forms.Label label31;
+        private System.Windows.Forms.TextBox textBoxAccountHost;
+        private System.Windows.Forms.TextBox textBoxAccountPassword;
+        private System.Windows.Forms.TextBox textBoxAccountLogin;
+        private System.Windows.Forms.Button button70;
+        private System.Windows.Forms.Button button71;
+        private System.Windows.Forms.ComboBox comboBox12;
+        private System.Windows.Forms.Button button72;
+        private System.Windows.Forms.Button button73;
     }
 }
 

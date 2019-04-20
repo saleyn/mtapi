@@ -62,21 +62,24 @@ namespace MTApiService
                 }
 
                 //init local pipe host
-                var localUrl = CreateConnectionAddress(null, port, true);
-                var localServiceHost = CreateServiceHost(localUrl, true);
+                var localPipeUrl = CreateConnectionAddress(null, port, true);
+                var localPipeServiceHost = CreateServiceHost(localPipeUrl, true);
+                if (localPipeServiceHost != null)
+                {
+                    _hosts.Add(localPipeServiceHost);
+                }
+
+                //init localhost
+                var localUrl = CreateConnectionAddress("localhost", port, false);
+                var localServiceHost = CreateServiceHost(localUrl, false);
                 if (localServiceHost != null)
                 {
                     _hosts.Add(localServiceHost);
                 }
-                
+
                 //init network hosts
                 var dnsHostName = Dns.GetHostName();
                 var ips = Dns.GetHostEntry(dnsHostName);
-                if (ips == null)
-                {
-                    Log.WarnFormat("InitHosts: end. Dns.GetHostEntry has returned null for DNS Host Name {0}", dnsHostName);
-                    return false;
-                }
 
                 foreach (var ipAddress in ips.AddressList)
                 {

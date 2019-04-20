@@ -1,13 +1,14 @@
-﻿using System;
+﻿// ReSharper disable InconsistentNaming
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using MTApiService;
 using System.Collections;
 using System.ServiceModel;
 using MtApi5.Requests;
-using MtApi5.Responses;
 using Newtonsoft.Json;
 using System.Threading.Tasks;
+using MtApi5.Events;
 
 namespace MtApi5
 {
@@ -32,17 +33,28 @@ namespace MtApi5
 
 
         #region Private Fields
+        private static readonly MtLog Log = LogConfigurator.GetLogger(typeof(MtApi5Client));
+
         private MtClient _client;
         private readonly object _locker = new object();
-        private volatile bool _isBacktestingMode = false;
+        private volatile bool _isBacktestingMode;
         private Mt5ConnectionState _connectionState = Mt5ConnectionState.Disconnected;
         private int _executorHandle;
+        private readonly Dictionary<Mt5EventTypes, Action<int, string>> _mtEventHandlers =
+            new Dictionary<Mt5EventTypes, Action<int, string>>();
+        
         #endregion
 
         #region Public Methods
         public MtApi5Client()
         {
             LogConfigurator.Setup(LogProfileName);
+
+            _mtEventHandlers[Mt5EventTypes.OnBookEvent] = ReceivedOnBookEvent;
+            _mtEventHandlers[Mt5EventTypes.OnTick] = ReceivedOnTickEvent;
+            _mtEventHandlers[Mt5EventTypes.OnTradeTransaction] = ReceivedOnTradeTransactionEvent;
+            _mtEventHandlers[Mt5EventTypes.OnLastTimeBar] = ReceivedOnLastTimeBarEvent;
+            _mtEventHandlers[Mt5EventTypes.OnLockTicks] = ReceivedOnLockTicksEvent;
         }
 
         ///<summary>
@@ -78,8 +90,8 @@ namespace MtApi5
         public IEnumerable<Mt5Quote> GetQuotes()
         {
             var client = Client;
-            var quotes = client != null ? client.GetQuotes() : null;
-            return quotes?.Select(q => q.Parse());
+            var quotes = client?.GetQuotes();
+            return quotes?.Select(q => new Mt5Quote(q));
         }
 
         ///<summary>
@@ -104,17 +116,22 @@ namespace MtApi5
         /// </returns>
         public bool OrderSend(MqlTradeRequest request, out MqlTradeResult result)
         {
+            Log.Debug($"OrderSend: request = {request}");
+
             if (request == null)
             {
+                Log.Warn("OrderSend: request is not defined!");
                 result = null;
                 return false;
             }
 
-            var commandParameters = request.ToArrayList();
+            var response = SendRequest<OrderSendResult>(new OrderSendRequest
+            {
+                TradeRequest = request
+            });
 
-            var strResult = SendCommand<string>(Mt5CommandType.OrderSend, commandParameters);
-
-            return strResult.ParseResult(ParamSeparator, out result); 
+            result = response?.TradeResult;
+            return response != null && response.RetVal;
         }
 
         ///<summary>
@@ -180,17 +197,22 @@ namespace MtApi5
         /// </returns>
         public bool OrderCheck(MqlTradeRequest request, out MqlTradeCheckResult result)
         {
+            Log.Debug($"OrderCheck: request = {request}");
+
             if (request == null)
             {
+                Log.Warn("OrderCheck: request is not defined!");
                 result = null;
                 return false;
             }
 
-            var commandParameters = request.ToArrayList();
+            var response = SendRequest<OrderCheckResult>(new OrderCheckRequest
+            {
+                TradeRequest = request
+            });
 
-            var strResult = SendCommand<string>(Mt5CommandType.OrderSend, commandParameters);
-
-            return strResult.ParseResult(ParamSeparator, out result); 
+            result = response?.TradeCheckResult;
+            return response != null && response.RetVal;
         }
 
         ///<summary>
@@ -224,6 +246,17 @@ namespace MtApi5
         }
 
         ///<summary>
+        ///Selects an open position to work with based on the ticket number specified in the position. If successful, returns true. Returns false if the function failed.
+        ///</summary>
+        ///<param name="ticket">Position ticket.</param>
+        public bool PositionSelectByTicket(ulong ticket)
+        {
+            var commandParameters = new ArrayList { ticket };
+
+            return SendCommand<bool>(Mt5CommandType.PositionSelectByTicket, commandParameters);
+        }
+
+        ///<summary>
         ///The function returns the requested property of an open position, pre-selected using PositionGetSymbol or PositionSelect.
         ///</summary>
         ///<param name="propertyId">Identifier of a position property.</param>
@@ -254,6 +287,17 @@ namespace MtApi5
             var commandParameters = new ArrayList { (int)propertyId };
 
             return SendCommand<string>(Mt5CommandType.PositionGetString, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the ticket of a position with the specified index in the list of open positions and automatically selects the position to work with using functions PositionGetDouble, PositionGetInteger, PositionGetString.
+        ///</summary>
+        ///<param name="index">Identifier of a position property.</param>
+        public ulong PositionGetTicket(int index)
+        {
+            var commandParameters = new ArrayList { index };
+
+            return SendCommand<ulong>(Mt5CommandType.PositionGetTicket, commandParameters);
         }
 
         ///<summary>
@@ -445,7 +489,7 @@ namespace MtApi5
         ///<param name="propertyId"> Identifier of a deal property.</param>
         public double HistoryDealGetDouble(ulong ticketNumber, ENUM_DEAL_PROPERTY_DOUBLE propertyId)
         {
-            var commandParameters = new ArrayList { ticketNumber, propertyId };
+            var commandParameters = new ArrayList { ticketNumber, (int)propertyId };
 
             return SendCommand<double>(Mt5CommandType.HistoryDealGetDouble, commandParameters);
         }
@@ -457,7 +501,7 @@ namespace MtApi5
         ///<param name="propertyId"> Identifier of a deal property.</param>
         public long HistoryDealGetInteger(ulong ticketNumber, ENUM_DEAL_PROPERTY_INTEGER propertyId)
         {
-            var commandParameters = new ArrayList { ticketNumber, propertyId };
+            var commandParameters = new ArrayList { ticketNumber, (int)propertyId };
 
             return SendCommand<long>(Mt5CommandType.HistoryDealGetInteger, commandParameters);
         }
@@ -469,7 +513,7 @@ namespace MtApi5
         ///<param name="propertyId"> Identifier of a deal property.</param>
         public string HistoryDealGetString(ulong ticketNumber, ENUM_DEAL_PROPERTY_STRING propertyId)
         {
-            var commandParameters = new ArrayList { ticketNumber, propertyId };
+            var commandParameters = new ArrayList { ticketNumber, (int)propertyId };
 
             return SendCommand<string>(Mt5CommandType.HistoryDealGetString, commandParameters);
         }
@@ -477,20 +521,60 @@ namespace MtApi5
         ///<summary>
         ///Close all open positions. 
         ///</summary>
+        [Obsolete("OrderCloseAll is deprecated, please use PositionCloseAll instead.")]
         public bool OrderCloseAll()
         {
             return SendCommand<bool>(Mt5CommandType.OrderCloseAll, null);
         }
 
         ///<summary>
+        ///Close all open positions. Returns count of closed positions.
+        ///</summary>
+        public int PositionCloseAll()
+        {
+            return SendCommand<int>(Mt5CommandType.PositionCloseAll, null);
+        }
+
+        ///<summary>
         ///Closes a position with the specified ticket.
         ///</summary>
         ///<param name="ticket">Ticket of the closed position.</param>
-        public bool PositionClose(int ticket)
+        ///<param name="deviation">Maximal deviation from the current price (in points).</param>
+        public bool PositionClose(ulong ticket, ulong deviation = ulong.MaxValue)
         {
-            var commandParameters = new ArrayList { ticket};
+            var commandParameters = new ArrayList { ticket, deviation };
 
             return SendCommand<bool>(Mt5CommandType.PositionClose, commandParameters);
+        }
+
+        ///<summary>
+        ///Closes a position with the specified ticket.
+        ///</summary>
+        ///<param name="ticket">Ticket of the closed position.</param>
+        ///<param name="deviation">Maximal deviation from the current price (in points).</param>
+        /// <param name="result">output result</param>
+        public bool PositionClose(ulong ticket, ulong deviation, out MqlTradeResult result)
+        {
+            Log.Debug($"PositionClose: ticket = {ticket}, deviation = {deviation}");
+
+            var response = SendRequest<PositionCloseResult>(new PositionCloseRequest
+            {
+                Ticket = ticket,
+                Deviation = deviation
+            });
+
+            result = response?.TradeResult;
+            return response != null && response.RetVal;
+        }
+
+        ///<summary>
+        ///Closes a position with the specified ticket.
+        ///</summary>
+        ///<param name="ticket">Ticket of the closed position.</param>
+        /// <param name="result">output result</param>
+        public bool PositionClose(ulong ticket, out MqlTradeResult result)
+        {
+            return PositionClose(ticket, ulong.MaxValue, out result);
         }
 
         /// <summary>
@@ -509,6 +593,53 @@ namespace MtApi5
             var commandParameters = new ArrayList { symbol, (int) orderType, volume, price, sl, tp, comment };
 
             return SendCommand<bool>(Mt5CommandType.PositionOpen, commandParameters);
+        }
+
+        /// <summary>
+        /// Opens a position with the specified parameters.
+        /// </summary>
+        /// <param name="symbol">symbol</param>
+        /// <param name="orderType">order type to open position </param>
+        /// <param name="volume">position volume</param>
+        /// <param name="price">execution price</param>
+        /// <param name="sl">Stop Loss price</param>
+        /// <param name="tp">Take Profit price</param>
+        /// <param name="comment">comment</param>
+        /// <param name="result">output result</param>
+        /// <returns>true - successful check of the basic structures, otherwise - false.</returns>
+        public bool PositionOpen(string symbol, ENUM_ORDER_TYPE orderType, double volume, double price, double sl, double tp, string comment, out MqlTradeResult result)
+        {
+            Log.Debug($"PositionOpen: symbol = {symbol}, orderType = {orderType}, volume = {volume}, price = {price}, sl = {sl}, tp = {tp}, comment = {comment}");
+
+            var response = SendRequest<OrderSendResult>(new PositionOpenRequest
+            {
+                Symbol = symbol,
+                OrderType = orderType,
+                Volume = volume,
+                Price = price,
+                Sl = sl,
+                Tp = tp,
+                Comment = comment
+            });
+
+            result = response?.TradeResult;
+            return response != null && response.RetVal;
+        }
+
+        /// <summary>
+        /// Opens a position with the specified parameters.
+        /// </summary>
+        /// <param name="symbol">symbol</param>
+        /// <param name="orderType">order type to open position </param>
+        /// <param name="volume">position volume</param>
+        /// <param name="price">execution price</param>
+        /// <param name="sl">Stop Loss price</param>
+        /// <param name="tp">Take Profit price</param>
+        /// <param name="result">output result</param>
+        /// <returns>true - successful check of the basic structures, otherwise - false.</returns>
+        public bool PositionOpen(string symbol, ENUM_ORDER_TYPE orderType, double volume, double price, double sl, double tp, out MqlTradeResult result)
+        {
+            return PositionOpen(symbol, orderType, volume, price, sl, tp, "", out result);
         }
         #endregion
 
@@ -555,11 +686,11 @@ namespace MtApi5
         ///<param name="symbolName">Symbol name.</param>
         ///<param name="timeframe"> Period.</param>
         ///<param name="propId">Identifier of the requested property, value of the ENUM_SERIES_INFO_INTEGER enumeration.</param>
-        public int SeriesInfoInteger(string symbolName, ENUM_TIMEFRAMES timeframe, ENUM_SERIES_INFO_INTEGER propId)
+        public long SeriesInfoInteger(string symbolName, ENUM_TIMEFRAMES timeframe, ENUM_SERIES_INFO_INTEGER propId)
         {
             var commandParameters = new ArrayList { symbolName, (int)timeframe, (int)propId };
 
-            return SendCommand<int>(Mt5CommandType.SeriesInfoInteger, commandParameters);
+            return SendCommand<long>(Mt5CommandType.SeriesInfoInteger, commandParameters);
         }
 
         ///<summary>
@@ -667,7 +798,7 @@ namespace MtApi5
                 ratesArray = new MqlRates[retVal.Length];
                 for(var i = 0; i < retVal.Length; i++)
                 {
-                    ratesArray[i] = new MqlRates(Mt5TimeConverter.ConvertFromMtTime(retVal[i].time)
+                    ratesArray[i] = new MqlRates(retVal[i].time
                         , retVal[i].open
                         , retVal[i].high
                         , retVal[i].low
@@ -680,7 +811,7 @@ namespace MtApi5
 
             return ratesArray?.Length ?? 0;
         }
-
+            
         ///<summary>
         ///Gets history data of MqlRates structure of a specified symbol-period in specified quantity into the ratesArray array. The elements ordering of the copied data is from present to the past, i.e., starting position of 0 means the current bar.
         ///</summary>
@@ -701,7 +832,7 @@ namespace MtApi5
                 ratesArray = new MqlRates[retVal.Length];
                 for (var i = 0; i < retVal.Length; i++)
                 {
-                    ratesArray[i] = new MqlRates(Mt5TimeConverter.ConvertFromMtTime(retVal[i].time)
+                    ratesArray[i] = new MqlRates(retVal[i].time
                         , retVal[i].open
                         , retVal[i].high
                         , retVal[i].low
@@ -735,7 +866,7 @@ namespace MtApi5
                 ratesArray = new MqlRates[retVal.Length];
                 for (var i = 0; i < retVal.Length; i++)
                 {
-                    ratesArray[i] = new MqlRates(Mt5TimeConverter.ConvertFromMtTime(retVal[i].time)
+                    ratesArray[i] = new MqlRates(retVal[i].time
                         , retVal[i].open
                         , retVal[i].high
                         , retVal[i].low
@@ -1198,11 +1329,40 @@ namespace MtApi5
         ///<see href="https://www.mql5.com/en/docs/series/copyticks"/>
         public List<MqlTick> CopyTicks(string symbolName, CopyTicksFlag flags = CopyTicksFlag.All, ulong from = 0, uint count = 0)
         {
-            var response = SendRequest<CopyTicksResponse>(new CopyTicksRequest
+            var response = SendRequest<List<MqlTick>>(new CopyTicksRequest
             {
-                SymbolName = symbolName, Flags = (int)flags, From = from, Count = count
+                SymbolName = symbolName,
+                Flags = (int)flags,
+                From = from,
+                Count = count
             });
-            return response.Ticks;
+            return response;
+        }
+
+        ///<summary>
+        ///The function returns the handle of a specified technical indicator created based on the array of parameters of MqlParam type.
+        ///</summary>
+        ///<param name="symbol">Name of a symbol, on data of which the indicator is calculated. NULL means the current symbol.</param>
+        ///<param name="period">The value of the timeframe can be one of values of the ENUM_TIMEFRAMES enumeration, 0 means the current timeframe.</param>
+        ///<param name="indicatorType">Indicator type, can be one of values of the ENUM_INDICATOR enumeration.</param>
+        ///<param name="parameters">An array of MqlParam type, whose elements contain the type and value of each input parameter of a technical indicator.</param>
+        public int IndicatorCreate(string symbol, ENUM_TIMEFRAMES period, ENUM_INDICATOR indicatorType, List<MqlParam> parameters = null)
+        {
+            var response = SendRequest<int>(new IndicatorCreateRequest
+            {
+                Symbol = symbol,
+                Period = period,
+                IndicatorType = indicatorType,
+                Parameters = parameters
+            });
+            return response;
+        }
+
+        public bool IndicatorRelease(int indicatorHandle)
+        {
+            var commandParameters = new ArrayList { indicatorHandle };
+
+            return SendCommand<bool>(Mt5CommandType.IndicatorRelease, commandParameters);
         }
         #endregion
 
@@ -1290,6 +1450,23 @@ namespace MtApi5
             return SendCommand<string>(Mt5CommandType.SymbolInfoString, commandParameters);
         }
 
+        ///<summary>
+        ///Returns the corresponding property of a specified symbol. 
+        ///</summary>
+        ///<param name="symbolName">Symbol name.</param>
+        ///<param name="propId">Identifier of a symbol property.</param>
+        ///<param name="value">Variable of the string type receiving the value of the requested property.</param>
+        public bool SymbolInfoString(string symbolName, ENUM_SYMBOL_INFO_STRING propId, out string value)
+        {
+            var response = SendRequest<SymbolInfoStringResult>(new SymbolInfoStringRequest
+            {
+                SymbolName = symbolName,
+                PropId = propId
+            });
+
+            value = response?.StringVar;
+            return response?.RetVal ?? false;
+        }
 
         ///<summary>
         ///The function returns current prices of a specified symbol in a variable of the MqlTick type.
@@ -1376,40 +1553,1534 @@ namespace MtApi5
         ///<param name="book">Reference to an array of Depth of Market records.</param>        
         public bool MarketBookGet(string symbol, out MqlBookInfo[] book)
         {
-            var commandParameters = new ArrayList { symbol };
-
-            var retVal = SendCommand<MtMqlBookInfo[]>(Mt5CommandType.MarketBookGet, commandParameters);
-
-            book = null; 
-            if (retVal != null)
+            var response = SendRequest<List<MqlBookInfo>>(new MarketBookGetRequest
             {
-                book = new MqlBookInfo[retVal.Length];
+                Symbol = symbol
+            });
 
-                foreach (var t in retVal)
-                {
-                    book[0] = new MqlBookInfo((ENUM_BOOK_TYPE)t.type, t.price, t.volume);
-                }
-            }
-
-            return book != null;
+            book = response?.ToArray();
+            return response != null;
         }
 
         #endregion
 
+        #region Chart Operations
+
+        ///<summary>
+        ///Returns the ID of the current chart.
+        ///</summary>
+        ///<returns>
+        /// Value of long type.
+        ///</returns>
+        public long ChartId()
+        {
+            return SendCommand<long>(Mt5CommandType.ChartId, null);
+        }
+
+        ///<summary>
+        ///This function calls a forced redrawing of a specified chart.
+        ///</summary>
+        ///<param name="chartId">Chart ID. 0 means the current chart.</param>
+        public void ChartRedraw(long chartId = 0)
+        {
+            var commandParameters = new ArrayList { chartId };
+            SendCommand<object>(Mt5CommandType.ChartRedraw, commandParameters);
+        }
+
+        ///<summary>
+        ///Applies a specific template from a specified file to the chart.
+        ///</summary>
+        ///<param name="chartId">Chart ID.</param>
+        ///<param name="filename">The name of the file containing the template.</param>
+        ///<returns>
+        ///Returns true if the command has been added to chart queue, otherwise false.
+        ///</returns>
+        public bool ChartApplyTemplate(long chartId, string filename)
+        {
+            var commandParameters = new ArrayList { chartId, filename };
+            return SendCommand<bool>(Mt5CommandType.ChartApplyTemplate, commandParameters);
+        }
+
+        ///<summary>
+        ///Saves current chart settings in a template with a specified name.
+        ///</summary>
+        ///<param name="chartId">Chart ID.</param>
+        ///<param name="filename">The filename to save the template. The ".tpl" extension will be added to the filename automatically; there is no need to specify it. The template is saved in data_folder\templates\ and can be used for manual application in the terminal. If a template with the same filename already exists, the contents of this file will be overwritten.</param>
+        ///<returns>
+        ///Returns true if the command has been added to chart queue, otherwise false.
+        ///</returns>
+        public bool ChartSaveTemplate(long chartId, string filename)
+        {
+            var commandParameters = new ArrayList { chartId, filename };
+            return SendCommand<bool>(Mt5CommandType.ChartSaveTemplate, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the number of a subwindow where an indicator is drawn.
+        ///</summary>
+        ///<param name="chartId">Chart ID.</param>
+        ///<param name="indicatorShortname">Short name of the indicator.</param>
+        ///<returns>
+        ///Subwindow number in case of success. In case of failure the function returns -1.
+        ///</returns>
+        public int ChartWindowFind(long chartId, string indicatorShortname)
+        {
+            var commandParameters = new ArrayList { chartId, indicatorShortname };
+            return SendCommand<int>(Mt5CommandType.ChartWindowFind, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the number of a subwindow where an indicator is drawn.
+        ///</summary>
+        ///<param name="chartId">Chart ID.</param>
+        ///<param name="subWindow">The number of the chart subwindow. 0 means the main chart window.</param>
+        ///<param name="time">The time value on the chart, for which the value in pixels along the X axis will be received.</param>
+        ///<param name="price">The price value on the chart, for which the value in pixels along the Y axis will be received.</param>
+        ///<param name="x">The variable, into which the conversion of time to X will be received. The origin is in the upper left corner of the main chart window.</param>
+        ///<param name="y">The variable, into which the conversion of price to Y will be received. The origin is in the upper left corner of the main chart window.</param>
+        ///<returns>
+        ///Subwindow number in case of success. In case of failure the function returns -1.
+        ///</returns>
+        public bool ChartTimePriceToXY(long chartId, int subWindow, DateTime? time, double price, out int x, out int y)
+        {
+            var result = SendRequest<ChartTimePriceToXyResult>(new ChartTimePriceToXyRequest
+                {
+                    ChartId = chartId,
+                    SubWindow = subWindow,
+                    Time = time,
+                    Price = price
+                });
+
+            x = result?.X ?? 0;
+            y = result?.Y ?? 0;
+            return result?.RetVal ?? false;
+        }
+
+        ///<summary>
+        ///The function returns the number of a subwindow where an indicator is drawn.
+        ///</summary>
+        ///<param name="chartId">Chart ID.</param>
+        ///<param name="x">The variable, into which the conversion of time to X will be received. The origin is in the upper left corner of the main chart window.</param>
+        ///<param name="y">The variable, into which the conversion of price to Y will be received. The origin is in the upper left corner of the main chart window.</param>
+        ///<param name="subWindow">The number of the chart subwindow. 0 means the main chart window.</param>
+        ///<param name="time">The time value on the chart, for which the value in pixels along the X axis will be received.</param>
+        ///<param name="price">The price value on the chart, for which the value in pixels along the Y axis will be received.</param>
+        ///<returns>
+        ///Subwindow number in case of success. In case of failure the function returns -1.
+        ///</returns>
+        public bool ChartXYToTimePrice(long chartId, int x, int y, out int subWindow, out DateTime? time, out double price)
+        {
+            var result = SendRequest<ChartXyToTimePriceResult>(new ChartXyToTimePriceRequest
+            {
+                ChartId = chartId,
+                X = x,
+                Y = y
+            });
+
+            subWindow = result?.SubWindow ?? 0;
+            time = result?.Time;
+            price = result?.Price ?? double.NaN;
+            return result?.RetVal ?? false;
+        }
+
+        ///<summary>
+        ///Opens a new chart with the specified symbol and period.
+        ///</summary>
+        ///<param name="symbol">Chart symbol. NULL means the symbol of the  current chart (the Expert Advisor is attached to).</param>
+        ///<param name="period"> Chart period (timeframe). Can be one of the ENUM_TIMEFRAMES values. 0 means the current chart period.</param>
+        ///<returns>
+        ///If successful, it returns the opened chart ID. Otherwise returns 0.
+        ///</returns>
+        public long ChartOpen(string symbol, ENUM_TIMEFRAMES period)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period };
+            return SendCommand<long>(Mt5CommandType.ChartOpen, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the ID of the first chart of the client terminal.
+        ///</summary>
+        public long ChartFirst()
+        {
+            return SendCommand<long>(Mt5CommandType.ChartFirst, null);
+        }
+
+        ///<summary>
+        ///Returns the chart ID of the chart next to the specified one.
+        ///</summary>
+        ///<param name="chartId">Chart ID. 0 does not mean the current chart. 0 means "return the first chart ID".</param>
+        ///<returns>
+        ///Chart ID. If this is the end of the chart list, it returns -1.
+        ///</returns>
+        public long ChartNext(long chartId)
+        {
+            var commandParameters = new ArrayList { chartId };
+            return SendCommand<long>(Mt5CommandType.ChartNext, commandParameters);
+        }
+
+        ///<summary>
+        ///Closes the specified chart.
+        ///</summary>
+        ///<param name="chartId">Chart ID. 0 means the current chart.</param>
+        ///<returns>
+        ///If successful, returns true, otherwise false.
+        ///</returns>
+        public bool ChartClose(long chartId = 0)
+        {
+            var commandParameters = new ArrayList { chartId };
+            return SendCommand<bool>(Mt5CommandType.ChartClose, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the symbol name for the specified chart.
+        ///</summary>
+        ///<param name="chartId">Chart ID. 0 means the current chart.</param>
+        ///<returns>
+        ///If chart does not exist, the result will be an empty string.
+        ///</returns>
+        public string ChartSymbol(long chartId)
+        {
+            var commandParameters = new ArrayList { chartId };
+            return SendCommand<string>(Mt5CommandType.ChartSymbol, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the timeframe period of specified chart.
+        ///</summary>
+        ///<param name="chartId">Chart ID. 0 means the current chart.</param>
+        ///<returns>
+        ///The function returns one of the ENUM_TIMEFRAMES values. If chart does not exist, it returns 0.
+        ///</returns>
+        public ENUM_TIMEFRAMES ChartPeriod(long chartId)
+        {
+            var commandParameters = new ArrayList { chartId };
+            return (ENUM_TIMEFRAMES)SendCommand<int>(Mt5CommandType.ChartPeriod, commandParameters);
+        }
+
+        ///<summary>
+        ///Sets a value for a corresponding property of the specified chart. Chart property should be of a double type.
+        ///</summary>
+        ///<param name="chartId">Chart ID. 0 means the current chart.</param>
+        ///<param name="propId">Chart property ID. Can be one of the ENUM_CHART_PROPERTY_DOUBLE values (except the read-only properties).</param>
+        ///<param name="value">Property value.</param>
+        ///<returns>
+        ///Returns true if the command has been added to chart queue, otherwise false.
+        ///</returns>
+        public bool ChartSetDouble(long chartId, ENUM_CHART_PROPERTY_DOUBLE propId, double value)
+        {
+            var commandParameters = new ArrayList { chartId, (int)propId, value };
+            return SendCommand<bool>(Mt5CommandType.ChartSetDouble, commandParameters);
+        }
+
+        ///<summary>
+        ///Sets a value for a corresponding property of the specified chart. Chart property must be datetime, int, color, bool or char.
+        ///</summary>
+        ///<param name="chartId">Chart ID. 0 means the current chart.</param>
+        ///<param name="propId">Chart property ID. It can be one of the ENUM_CHART_PROPERTY_INTEGER value (except the read-only properties).</param>
+        ///<param name="value">Property value.</param>
+        ///<returns>
+        ///Returns true if the command has been added to chart queue, otherwise false.
+        ///</returns>
+        public bool ChartSetInteger(long chartId, ENUM_CHART_PROPERTY_INTEGER propId, long value)
+        {
+            var commandParameters = new ArrayList { chartId, (int)propId, value };
+            return SendCommand<bool>(Mt5CommandType.ChartSetInteger, commandParameters);
+        }
+
+        ///<summary>
+        ///Sets a value for a corresponding property of the specified chart. Chart property must be of the string type.
+        ///</summary>
+        ///<param name="chartId">Chart ID. 0 means the current chart.</param>
+        ///<param name="propId">Chart property ID. Its value can be one of the ENUM_CHART_PROPERTY_STRING values (except the read-only properties).</param>
+        ///<param name="value">Property value string. String length cannot exceed 2045 characters (extra characters will be truncated).</param>
+        ///<returns>
+        ///Returns true if the command has been added to chart queue, otherwise false.
+        ///</returns>
+        public bool ChartSetString(long chartId, ENUM_CHART_PROPERTY_STRING propId, string value)
+        {
+            var commandParameters = new ArrayList { chartId, (int)propId, value };
+            return SendCommand<bool>(Mt5CommandType.ChartSetString, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the value of a corresponding property of the specified chart. Chart property must be of double type.
+        ///</summary>
+        ///<param name="chartId">Chart ID. 0 means the current chart.</param>
+        ///<param name="propId">Chart property ID. This value can be one of the ENUM_CHART_PROPERTY_DOUBLE values.</param>
+        ///<param name="subWindow">Number of the chart subwindow. For the first case, the default value is 0 (main chart window). The most of the properties do not require a subwindow number.</param>
+        ///<returns>
+        ///The value of double type.
+        ///</returns>
+        public double ChartGetDouble(long chartId, ENUM_CHART_PROPERTY_DOUBLE propId, int subWindow = 0)
+        {
+            var commandParameters = new ArrayList { chartId, (int)propId, subWindow };
+            return SendCommand<double>(Mt5CommandType.ChartGetDouble, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the value of a corresponding property of the specified chart. Chart property must be of datetime, int or bool type.
+        ///</summary>
+        ///<param name="chartId">Chart ID. 0 means the current chart.</param>
+        ///<param name="propId">Chart property ID. This value can be one of the ENUM_CHART_PROPERTY_INTEGER values.</param>
+        ///<param name="subWindow">Number of the chart subwindow. For the first case, the default value is 0 (main chart window). The most of the properties do not require a subwindow number.</param>
+        ///<returns>
+        ///The value of long type.
+        ///</returns>
+        public long ChartGetInteger(long chartId, ENUM_CHART_PROPERTY_INTEGER propId, int subWindow = 0)
+        {
+            var commandParameters = new ArrayList { chartId, (int)propId, subWindow };
+            return SendCommand<long>(Mt5CommandType.ChartGetInteger, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the value of a corresponding property of the specified chart. Chart property must be of string type.
+        ///</summary>
+        ///<param name="chartId">Chart ID. 0 means the current chart.</param>
+        ///<param name="propId">Chart property ID. This value can be one of the ENUM_CHART_PROPERTY_STRING values.</param>
+        ///<returns>
+        ///The value of string type.
+        ///</returns>
+        public string ChartGetString(long chartId, ENUM_CHART_PROPERTY_STRING propId)
+        {
+            var commandParameters = new ArrayList { chartId, (int)propId };
+            return SendCommand<string>(Mt5CommandType.ChartGetString, commandParameters);
+        }
+
+        ///<summary>
+        ///Performs shift of the specified chart by the specified number of bars relative to the specified position in the chart.
+        ///</summary>
+        ///<param name="chartId">Chart ID. 0 means the current chart.</param>
+        ///<param name="position">Chart position to perform a shift. Can be one of the ENUM_CHART_POSITION values.</param>
+        ///<param name="shift">Number of bars to shift the chart. Positive value means the right shift (to the end of chart), negative value means the left shift (to the beginning of chart). The zero shift can be used to navigate to the beginning or end of chart.</param>
+        ///<returns>
+        ///Returns true if successful, otherwise returns false.
+        ///</returns>
+        public bool ChartNavigate(long chartId, ENUM_CHART_POSITION position, int shift = 0)
+        {
+            var commandParameters = new ArrayList { chartId, (int)position, shift };
+            return SendCommand<bool>(Mt5CommandType.ChartNavigate, commandParameters);
+        }
+
+        ///<summary>
+        ///Adds an indicator with the specified handle into a specified chart window. Indicator and chart should be generated on the same symbol and time frame.
+        ///</summary>
+        ///<param name="chartId">Chart ID. 0 means the current chart.</param>
+        ///<param name="subWindow">Number of the chart subwindow. 0 denotes the main chart subwindow.</param>
+        ///<param name="indicatorHandle">The handle of the indicator.</param>
+        ///<returns>
+        ///The function returns true in case of success, otherwise it returns false. 
+        ///</returns>
+        public bool ChartIndicatorAdd(long chartId, int subWindow, int indicatorHandle)
+        {
+            var commandParameters = new ArrayList { chartId, subWindow, indicatorHandle };
+            return SendCommand<bool>(Mt5CommandType.ChartIndicatorAdd, commandParameters);
+        }
+
+        ///<summary>
+        ///Removes an indicator with a specified name from the specified chart window.
+        ///</summary>
+        ///<param name="chartId">Chart ID. 0 means the current chart.</param>
+        ///<param name="subWindow">Number of the chart subwindow. 0 denotes the main chart subwindow.</param>
+        ///<param name="indicatorShortname">The short name of the indicator which is set in the INDICATOR_SHORTNAME property with the IndicatorSetString() function. To get the short name of an indicator use the ChartIndicatorName() function.</param>
+        ///<returns>
+        ///Returns true in case of successful deletion of the indicator. 
+        ///</returns>
+        public bool ChartIndicatorDelete(long chartId, int subWindow, string indicatorShortname)
+        {
+            var commandParameters = new ArrayList { chartId, subWindow, indicatorShortname };
+            return SendCommand<bool>(Mt5CommandType.ChartIndicatorDelete, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the handle of the indicator with the specified short name in the specified chart window.
+        ///</summary>
+        ///<param name="chartId">Chart ID. 0 means the current chart.</param>
+        ///<param name="subWindow">Number of the chart subwindow. 0 denotes the main chart subwindow.</param>
+        ///<param name="indicatorShortname">The short name of the indicator which is set in the INDICATOR_SHORTNAME property with the IndicatorSetString() function. To get the short name of an indicator use the ChartIndicatorName() function.</param>
+        ///<returns>
+        ///Returns an indicator handle if successful, otherwise returns INVALID_HANDLE. 
+        ///</returns>
+        public int ChartIndicatorGet(long chartId, int subWindow, string indicatorShortname)
+        {
+            var commandParameters = new ArrayList { chartId, subWindow, indicatorShortname };
+            return SendCommand<int>(Mt5CommandType.ChartIndicatorGet, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the short name of the indicator by the number in the indicators list on the specified chart window.
+        ///</summary>
+        ///<param name="chartId">Chart ID. 0 means the current chart.</param>
+        ///<param name="subWindow">Number of the chart subwindow. 0 denotes the main chart subwindow.</param>
+        ///<param name="index">the index of the indicator in the list of indicators. The numeration of indicators start with zero, i.e. the first indicator in the list has the 0 index. To obtain the number of indicators in the list use the ChartIndicatorsTotal() function.</param>
+        ///<returns>
+        ///The short name of the indicator which is set in the INDICATOR_SHORTNAME property with the IndicatorSetString() function.
+        ///</returns>
+        public string ChartIndicatorName(long chartId, int subWindow, int index)
+        {
+            var commandParameters = new ArrayList { chartId, subWindow, index };
+            return SendCommand<string>(Mt5CommandType.ChartIndicatorName, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the number of all indicators applied to the specified chart window.
+        ///</summary>
+        ///<param name="chartId">Chart ID. 0 means the current chart.</param>
+        ///<param name="subWindow">Number of the chart subwindow. 0 denotes the main chart subwindow.</param>
+        ///<returns>
+        ///The number of indicators in the specified chart window.
+        ///</returns>
+        public int ChartIndicatorsTotal(long chartId, int subWindow)
+        {
+            var commandParameters = new ArrayList { chartId, subWindow };
+            return SendCommand<int>(Mt5CommandType.ChartIndicatorsTotal, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the number (index) of the chart subwindow the Expert Advisor or script has been dropped to. 0 means the main chart window.
+        ///</summary>
+        public int ChartWindowOnDropped()
+        {
+            return SendCommand<int>(Mt5CommandType.ChartWindowOnDropped, null);
+        }
+
+        ///<summary>
+        ///Returns the price coordinate corresponding to the chart point the Expert Advisor or script has been dropped to.
+        ///</summary>
+        public double ChartPriceOnDropped()
+        {
+            return SendCommand<double>(Mt5CommandType.ChartPriceOnDropped, null);
+        }
+
+        ///<summary>
+        ///Returns the time coordinate corresponding to the chart point the Expert Advisor or script has been dropped to.
+        ///</summary>
+        public DateTime ChartTimeOnDropped()
+        {
+            var res = SendCommand<int>(Mt5CommandType.ChartTimeOnDropped, null);
+            return Mt5TimeConverter.ConvertFromMtTime(res);
+        }
+
+        ///<summary>
+        ///Returns the X coordinate of the chart point the Expert Advisor or script has been dropped to.
+        ///</summary>
+        public int ChartXOnDropped()
+        {
+            return SendCommand<int>(Mt5CommandType.ChartXOnDropped, null);
+        }
+
+        ///<summary>
+        ///Returns the Y coordinateof the chart point the Expert Advisor or script has been dropped to.
+        ///</summary>
+        public int ChartYOnDropped()
+        {
+            return SendCommand<int>(Mt5CommandType.ChartYOnDropped, null);
+        }
+
+        ///<summary>
+        ///Changes the symbol and period of the specified chart. The function is asynchronous, i.e. it sends the command and does not wait for its execution completion.
+        ///</summary>
+        ///<param name="chartId">Chart ID. 0 means the current chart.</param>
+        ///<param name="symbol">Chart symbol. NULL value means the current chart symbol (Expert Advisor is attached to)</param>
+        ///<param name="period">Chart period (timeframe). Can be one of the ENUM_TIMEFRAMES values. 0 means the current chart period.</param>
+        ///<returns>
+        ///Returns true if the command has been added to chart queue, otherwise false.
+        ///</returns>
+        public bool ChartSetSymbolPeriod(long chartId, string symbol, ENUM_TIMEFRAMES period)
+        {
+            var commandParameters = new ArrayList { chartId, symbol, (int)period };
+            return SendCommand<bool>(Mt5CommandType.ChartSetSymbolPeriod, commandParameters);
+        }
+
+        ///<summary>
+        ///Saves current chart screen shot as a GIF, PNG or BMP file depending on specified extension.
+        ///</summary>
+        ///<param name="chartId">Chart ID. 0 means the current chart.</param>
+        ///<param name="filename">Screenshot file name. Cannot exceed 63 characters. Screenshot files are placed in the \Files directory.</param>
+        ///<param name="width">Screenshot width in pixels.</param>
+        ///<param name="height">Screenshot height in pixels.</param>
+        ///<param name="alignMode">Output mode of a narrow screenshot.</param>
+        ///<returns>
+        ///Returns true if the command has been added to chart queue, otherwise false.
+        ///</returns>
+        public bool ChartScreenShot(long chartId, string filename, int width, int height, ENUM_ALIGN_MODE alignMode = ENUM_ALIGN_MODE.ALIGN_RIGHT)
+        {
+            var commandParameters = new ArrayList { chartId, filename, width, height, (int)alignMode };
+            return SendCommand<bool>(Mt5CommandType.ChartScreenShot, commandParameters);
+        }
+        #endregion
+
+        #region Commands of Terminal
+        ///<summary>
+        ///Returns the value of a corresponding property of the mql5 program environment. 
+        ///</summary>
+        ///<param name="propertyId">Identifier of a property. Can be one of the values of the ENUM_TERMINAL_INFO_STRING enumeration.</param>
+        ///<returns>
+        ///Value of string type.
+        ///</returns>
+        public string TerminalInfoString(ENUM_TERMINAL_INFO_STRING propertyId)
+        {
+            var commandParameters = new ArrayList { (int)propertyId };
+            return SendCommand<string>(Mt5CommandType.TerminalInfoString, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the value of a corresponding property of the mql5 program environment.
+        ///</summary>
+        ///<param name="propertyId">Identifier of a property. Can be one of the values of the ENUM_TERMINAL_INFO_INTEGER enumeration.</param>
+        ///<returns>
+        ///Value of int type.
+        ///</returns>
+        public int TerminalInfoInteger(ENUM_TERMINAL_INFO_INTEGER propertyId)
+        {
+            var commandParameters = new ArrayList { (int)propertyId };
+            return SendCommand<int>(Mt5CommandType.TerminalInfoInteger, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the value of a corresponding property of the mql5 program environment.
+        ///</summary>
+        ///<param name="propertyId">Identifier of a property. Can be one of the values of the ENUM_TERMINAL_INFO_DOUBLE enumeration.</param>
+        ///<returns>
+        ///Value of double type.
+        ///</returns>
+        public double TerminalInfoDouble(ENUM_TERMINAL_INFO_DOUBLE propertyId)
+        {
+            var commandParameters = new ArrayList { (int)propertyId };
+            return SendCommand<double>(Mt5CommandType.TerminalInfoDouble, commandParameters);
+        }
+        #endregion 
+
+
         #region Common Functions
+
         ///<summary>
         ///It enters a message in the Expert Advisor log.
         ///</summary>
-        ///<param name="message">Symbol name.</param>
+        ///<param name="message">Message</param>
         public bool Print(string message)
         {
             var commandParameters = new ArrayList { message };
-
             return SendCommand<bool>(Mt5CommandType.Print, commandParameters);
+        }
+
+        ///<summary>
+        ///Displays a message in a separate window.
+        ///</summary>
+        ///<param name="message">Message</param>
+        public void Alert(string message)
+        {
+            var commandParameters = new ArrayList { message };
+            SendCommand<object>(Mt5CommandType.Alert, commandParameters);
+        }
+
+        #endregion // Common Functions
+
+        #region Object Functions
+
+        ///<summary>
+        ///The function creates an object with the specified name, type, and the initial coordinates in the specified chart subwindow. 
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="name">Name of the object. The name must be unique within a chart, including its subwindows.</param>
+        ///<param name="type">Object type. The value can be one of the values of the ENUM_OBJECT enumeration.</param>
+        ///<param name="nwin">Number of the chart subwindow. 0 means the main chart window. The specified subwindow must exist, otherwise the function returns false.</param>
+        ///<param name="time">The time coordinate of the first anchor.</param>
+        ///<param name="price">The price coordinate of the first anchor point.</param>
+        public bool ObjectCreate(long chartId, string name, ENUM_OBJECT type, int nwin, DateTime time, double price)
+        {
+            var commandParameters = new ArrayList { chartId, name, (int)type, nwin, Mt5TimeConverter.ConvertToMtTime(time), price };
+            return SendCommand<bool>(Mt5CommandType.ObjectCreate, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the name of the corresponding object in the specified chart, in the specified subwindow, of the specified type.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="pos">Ordinal number of the object according to the specified filter by the number and type of the subwindow.</param>
+        ///<param name="subWindow">umber of the chart subwindow. 0 means the main chart window, -1 means all the subwindows of the chart, including the main window.</param>
+        ///<param name="type">Type of the object. The value can be one of the values of the ENUM_OBJECT enumeration. -1 means all types.</param>
+        public string ObjectName(long chartId, int pos, int subWindow = -1, int type = -1)
+        {
+            var commandParameters = new ArrayList { chartId, pos, subWindow, type };
+            return SendCommand<string>(Mt5CommandType.ObjectName, commandParameters);
+        }
+
+        ///<summary>
+        ///The function removes the object with the specified name from the specified chart.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="name">Name of object to be deleted.</param>
+        public bool ObjectDelete(long chartId, string name)
+        {
+            var commandParameters = new ArrayList { chartId, name };
+            return SendCommand<bool>(Mt5CommandType.ObjectDelete, commandParameters);
+        }
+
+        ///<summary>
+        ///The function removes the object with the specified name from the specified chart.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="subWindow">Number of the chart subwindow. 0 means the main chart window, -1 means all the subwindows of the chart, including the main window.</param>
+        ///<param name="type">Type of the object. The value can be one of the values of the ENUM_OBJECT enumeration. -1 means all types.</param>
+        public int ObjectsDeleteAll(long chartId, int subWindow = -1, int type = -1)
+        {
+            var commandParameters = new ArrayList { chartId, subWindow, type };
+            return SendCommand<int>(Mt5CommandType.ObjectsDeleteAll, commandParameters);
+        }
+
+        ///<summary>
+        ///The function searches for an object with the specified name in the chart with the specified ID.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="name">The name of the searched object.</param>
+        public int ObjectFind(long chartId, string name)
+        {
+            var commandParameters = new ArrayList { chartId, name };
+            return SendCommand<int>(Mt5CommandType.ObjectFind, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the time value for the specified price value of the specified object.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="name">Name of the object.</param>
+        ///<param name="value">Price value.</param>
+        ///<param name="lineId">Line identifier.</param>
+        public DateTime ObjectGetTimeByValue(long chartId, string name, double value, int lineId)
+        {
+            var commandParameters = new ArrayList { chartId, name, value, lineId };
+            var res = SendCommand<int>(Mt5CommandType.ObjectGetTimeByValue, commandParameters);
+            return Mt5TimeConverter.ConvertFromMtTime(res);
+        }
+
+        ///<summary>
+        ///The function returns the price value for the specified time value of the specified object.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="name">Name of the object.</param>
+        ///<param name="time">Time value.</param>
+        ///<param name="lineId">Line identifier.</param>
+        public double ObjectGetValueByTime(long chartId, string name, DateTime time, int lineId)
+        {
+            var commandParameters = new ArrayList { chartId, name, Mt5TimeConverter.ConvertToMtTime(time), lineId };
+            return SendCommand<double>(Mt5CommandType.ObjectGetValueByTime, commandParameters);
+        }
+
+        ///<summary>
+        ///The function changes coordinates of the specified anchor point of the object.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="name">Name of the object.</param>
+        ///<param name="pointIndex">Index of the anchor point. The number of anchor points depends on the type of object.</param>
+        ///<param name="time">Time coordinate of the selected anchor point.</param>
+        ///<param name="price">Price coordinate of the selected anchor point.</param>
+        public bool ObjectMove(long chartId, string name, int pointIndex, DateTime time, double price)
+        {
+            var commandParameters = new ArrayList { chartId, name, pointIndex, Mt5TimeConverter.ConvertToMtTime(time), price };
+            return SendCommand<bool>(Mt5CommandType.ObjectMove, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the number of objects in the specified chart, specified subwindow, of the specified type.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="subWindow">Number of the chart subwindow. 0 means the main chart window, -1 means all the subwindows of the chart, including the main window.</param>
+        ///<param name="type">Type of the object. The value can be one of the values of the ENUM_OBJECT enumeration. -1 means all types.</param>
+        public int ObjectsTotal(long chartId, int subWindow = -1, int type = -1)
+
+        {
+            var commandParameters = new ArrayList { chartId, subWindow, type };
+            return SendCommand<int>(Mt5CommandType.ObjectsTotal, commandParameters);
+        }
+
+        ///<summary>
+        ///The function sets the value of the corresponding object property. The object property must be of the double type.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="name">Name of the object.</param>
+        ///<param name="propId">ID of the object property. The value can be one of the values of the ENUM_OBJECT_PROPERTY_DOUBLE enumeration.</param>
+        ///<param name="propValue">The value of the property.</param>
+        public bool ObjectSetDouble(long chartId, string name, ENUM_OBJECT_PROPERTY_DOUBLE propId, double propValue)
+
+        {
+            var commandParameters = new ArrayList { chartId, name, (int)propId, propValue };
+            return SendCommand<bool>(Mt5CommandType.ObjectSetDouble, commandParameters);
+        }
+
+        ///<summary>
+        ///The function sets the value of the corresponding object property. The object property must be of the datetime, int, color, bool or char type.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="name">Name of the object.</param>
+        ///<param name="propId">ID of the object property. The value can be one of the values of the ENUM_OBJECT_PROPERTY_INTEGER enumeration.</param>
+        ///<param name="propValue">The value of the property.</param>
+        public bool ObjectSetInteger(long chartId, string name, ENUM_OBJECT_PROPERTY_INTEGER propId, long propValue)
+
+        {
+            var commandParameters = new ArrayList { chartId, name, (int)propId, propValue };
+            return SendCommand<bool>(Mt5CommandType.ObjectSetInteger, commandParameters);
+        }
+
+        ///<summary>
+        ///The function sets the value of the corresponding object property. The object property must be of the string type.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="name">Name of the object.</param>
+        ///<param name="propId">ID of the object property. The value can be one of the values of the ENUM_OBJECT_PROPERTY_STRING enumeration.</param>
+        ///<param name="propValue">The value of the property.</param>
+        public bool ObjectSetString(long chartId, string name, ENUM_OBJECT_PROPERTY_STRING propId, string propValue)
+
+        {
+            var commandParameters = new ArrayList { chartId, name, (int)propId, propValue };
+            return SendCommand<bool>(Mt5CommandType.ObjectSetString, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the value of the corresponding object property. The object property must be of the double type.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="name">Name of the object.</param>
+        ///<param name="propId">ID of the object property. The value can be one of the values of the ENUM_OBJECT_PROPERTY_DOUBLE enumeration.</param>
+        public double ObjectGetDouble(long chartId, string name, ENUM_OBJECT_PROPERTY_DOUBLE propId)
+        {
+            var commandParameters = new ArrayList { chartId, name, (int)propId };
+            return SendCommand<double>(Mt5CommandType.ObjectGetDouble, commandParameters);
+        }
+
+        ///<summary>
+        ///he function returns the value of the corresponding object property. The object property must be of the datetime, int, color, bool or char type.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="name">Name of the object.</param>
+        ///<param name="propId">ID of the object property. The value can be one of the values of the ENUM_OBJECT_PROPERTY_INTEGER enumeration.</param>
+        public long ObjectGetInteger(long chartId, string name, ENUM_OBJECT_PROPERTY_INTEGER propId)
+        {
+            var commandParameters = new ArrayList { chartId, name, (int)propId };
+            return SendCommand<long>(Mt5CommandType.ObjectGetInteger, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the value of the corresponding object property. The object property must be of the string type.
+        ///</summary>
+        ///<param name="chartId">Chart identifier. 0 means the current chart.</param>
+        ///<param name="name">Name of the object.</param>
+        ///<param name="propId">ID of the object property. The value can be one of the values of the ENUM_OBJECT_PROPERTY_STRING enumeration.</param>
+        public string ObjectGetString(long chartId, string name, ENUM_OBJECT_PROPERTY_STRING propId)
+        {
+            var commandParameters = new ArrayList { chartId, name, (int)propId };
+            return SendCommand<string>(Mt5CommandType.ObjectGetString, commandParameters);
+        }
+
+        #endregion //Object Functions
+
+        #region Technical Indicators
+
+        ///<summary>
+        ///The function creates Accelerator Oscillator in a global cache of the client terminal and returns its handle.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        public int iAC(string symbol, ENUM_TIMEFRAMES period)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period };
+            return SendCommand<int>(Mt5CommandType.iAC, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Accumulation/Distribution indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="appliedVolume">The volume used. Can be any of ENUM_APPLIED_VOLUME values.</param>
+        public int iAD(string symbol, ENUM_TIMEFRAMES period, ENUM_APPLIED_VOLUME appliedVolume)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, (int)appliedVolume };
+            return SendCommand<int>(Mt5CommandType.iAD, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Average Directional Movement Index indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="adxPeriod">Period to calculate the index.</param>
+        public int iADX(string symbol, ENUM_TIMEFRAMES period, int adxPeriod)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, adxPeriod };
+            return SendCommand<int>(Mt5CommandType.iADX, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of Average Directional Movement Index by Welles Wilder.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="adxPeriod">Period to calculate the index.</param>
+        public int iADXWilder(string symbol, ENUM_TIMEFRAMES period, int adxPeriod)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, adxPeriod };
+            return SendCommand<int>(Mt5CommandType.iADXWilder, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Alligator indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="jawPeriod">Averaging period for the blue line (Alligator's Jaw).</param>
+        ///<param name="jawShift">The shift of the blue line relative to the price chart.</param>
+        ///<param name="teethPeriod">Averaging period for the red line (Alligator's Teeth).</param>
+        ///<param name="teethShift">The shift of the red line relative to the price chart.</param>
+        ///<param name="lipsPeriod">Averaging period for the green line (Alligator's lips).</param>
+        ///<param name="lipsShift">The shift of the green line relative to the price chart.</param>
+        ///<param name="maMethod">The method of averaging. Can be any of the ENUM_MA_METHOD values.</param>
+        ///<param name="appliedPrice">The price used. Can be any of the price constants ENUM_APPLIED_PRICE or a handle of another indicator.</param>
+        public int iAlligator(string symbol, ENUM_TIMEFRAMES period, int jawPeriod, int jawShift, int teethPeriod, 
+            int teethShift, int lipsPeriod, int lipsShift, ENUM_MA_METHOD maMethod, ENUM_APPLIED_PRICE appliedPrice)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, jawPeriod, jawShift, teethPeriod, teethShift, lipsPeriod, lipsShift, (int)maMethod, (int)appliedPrice };
+            return SendCommand<int>(Mt5CommandType.iAlligator, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Adaptive Moving Average indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="amaPeriod">The calculation period, on which the efficiency coefficient is calculated.</param>
+        ///<param name="fastMaPeriod">Fast period for the smoothing coefficient calculation for a rapid market.</param>
+        ///<param name="slowMaPeriod">Slow period for the smoothing coefficient calculation in the absence of trend.</param>
+        ///<param name="amaShift">Shift of the indicator relative to the price chart.</param>
+        ///<param name="appliedPrice">The price used. Can be any of the price constants ENUM_APPLIED_PRICE or a handle of another indicator.</param>
+        public int iAMA(string symbol, ENUM_TIMEFRAMES period, int amaPeriod, int fastMaPeriod, int slowMaPeriod, int amaShift, ENUM_APPLIED_PRICE appliedPrice)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, amaPeriod, fastMaPeriod, slowMaPeriod, amaShift, (int)appliedPrice };
+            return SendCommand<int>(Mt5CommandType.iAMA, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Awesome Oscillator indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        public int iAO(string symbol, ENUM_TIMEFRAMES period)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period };
+            return SendCommand<int>(Mt5CommandType.iAO, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Average True Range indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="maPeriod">The value of the averaging period for the indicator calculation.</param>
+        public int iATR(string symbol, ENUM_TIMEFRAMES period, int maPeriod)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, maPeriod };
+            return SendCommand<int>(Mt5CommandType.iATR, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Bears Power indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="maPeriod">The value of the averaging period for the indicator calculation.</param>
+        public int iBearsPower(string symbol, ENUM_TIMEFRAMES period, int maPeriod)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, maPeriod };
+            return SendCommand<int>(Mt5CommandType.iBearsPower, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Bollinger Bands® indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="bandsPeriod">The averaging period of the main line of the indicator.</param>
+        ///<param name="bandsShift">The shift the indicator relative to the price chart.</param>
+        ///<param name="deviation">Deviation from the main line.</param>
+        ///<param name="appliedPrice">The price used. Can be any of the price constants ENUM_APPLIED_PRICE or a handle of another indicator.</param>
+        public int iBands(string symbol, ENUM_TIMEFRAMES period, int bandsPeriod, int bandsShift, double deviation, ENUM_APPLIED_PRICE appliedPrice)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, bandsPeriod, bandsShift, deviation, (int)appliedPrice };
+            return SendCommand<int>(Mt5CommandType.iBands, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Bulls Power indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="maPeriod">The averaging period for the indicator calculation.</param>
+        public int iBullsPower(string symbol, ENUM_TIMEFRAMES period, int maPeriod)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, maPeriod };
+            return SendCommand<int>(Mt5CommandType.iBullsPower, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Commodity Channel Index indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="maPeriod">The averaging period for the indicator calculation.</param>
+        ///<param name="appliedPrice">The price used. Can be any of the price constants ENUM_APPLIED_PRICE or a handle of another indicator.</param>
+        public int iCCI(string symbol, ENUM_TIMEFRAMES period, int maPeriod, ENUM_APPLIED_PRICE appliedPrice)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, maPeriod, (int)appliedPrice };
+            return SendCommand<int>(Mt5CommandType.iCCI, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Bulls Power indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="fastMaPeriod">Fast averaging period for calculations.</param>
+        ///<param name="slowMaPeriod">Slow averaging period for calculations.</param>
+        ///<param name="maMethod">Smoothing type. Can be one of the averaging constants of ENUM_MA_METHOD.</param>
+        ///<param name="appliedVolume">The volume used. Can be one of the constants of ENUM_APPLIED_VOLUME.</param>
+        public int iChaikin(string symbol, ENUM_TIMEFRAMES period, int fastMaPeriod, int slowMaPeriod, ENUM_MA_METHOD maMethod, ENUM_APPLIED_VOLUME appliedVolume)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, fastMaPeriod, slowMaPeriod, (int)maMethod, (int)appliedVolume };
+            return SendCommand<int>(Mt5CommandType.iChaikin, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Bulls Power indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="maPeriod">Averaging period (bars count) for calculations.</param>
+        ///<param name="maShift">Shift of the indicator relative to the price chart.</param>
+        ///<param name="appliedPrice">The price used. Can be any of the price constants ENUM_APPLIED_PRICE or a handle of another indicator.</param>
+        public int iDEMA(string symbol, ENUM_TIMEFRAMES period, int maPeriod, int maShift, ENUM_APPLIED_PRICE appliedPrice)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, maPeriod, maShift, (int)appliedPrice };
+            return SendCommand<int>(Mt5CommandType.iDEMA, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the DeMarker indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="maPeriod">Averaging period (bars count) for calculations.</param>
+        public int iDeMarker(string symbol, ENUM_TIMEFRAMES period, int maPeriod)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, maPeriod };
+            return SendCommand<int>(Mt5CommandType.iDeMarker, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Envelopes indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="maPeriod">Averaging period for the main line.</param>
+        ///<param name="maShift">The shift of the indicator relative to the price chart.</param>
+        ///<param name="maMethod">Smoothing type. Can be one of the values of ENUM_MA_METHOD.</param>
+        ///<param name="appliedPrice">The price used. Can be any of the price constants ENUM_APPLIED_PRICE or a handle of another indicator.</param>
+        ///<param name="deviation">The deviation from the main line (in percents).</param>
+        public int iEnvelopes(string symbol, ENUM_TIMEFRAMES period, int maPeriod, int maShift, ENUM_MA_METHOD maMethod, ENUM_APPLIED_PRICE appliedPrice, double deviation)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, maPeriod, maShift, (int)maMethod, (int)appliedPrice, deviation };
+            return SendCommand<int>(Mt5CommandType.iEnvelopes, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Force Index indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="maPeriod">Averaging period for the indicator calculations.</param>
+        ///<param name="maMethod">Smoothing type. Can be one of the values of ENUM_MA_METHOD.</param>
+        ///<param name="appliedVolume">The volume used. Can be one of the values of ENUM_APPLIED_VOLUME.</param>
+        public int iForce(string symbol, ENUM_TIMEFRAMES period, int maPeriod, ENUM_MA_METHOD maMethod, ENUM_APPLIED_VOLUME appliedVolume)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, maPeriod, (int)maMethod, (int)appliedVolume };
+            return SendCommand<int>(Mt5CommandType.iForce, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Force Index indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        public int iForce(string symbol, ENUM_TIMEFRAMES period)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period };
+            return SendCommand<int>(Mt5CommandType.iForce, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Fractal Adaptive Moving Average indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="maPeriod">Period (bars count) for the indicator calculations.</param>
+        ///<param name="maShift">Shift of the indicator in the price chart.</param>
+        ///<param name="appliedPrice">The price used. Can be any of the price constants ENUM_APPLIED_PRICE or a handle of another indicator.</param>
+        public int iFrAMA(string symbol, ENUM_TIMEFRAMES period, int maPeriod, int maShift, ENUM_APPLIED_PRICE appliedPrice)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, maPeriod, maShift, (int)appliedPrice };
+            return SendCommand<int>(Mt5CommandType.iFrAMA, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Gator indicator. The Oscillator shows the difference between the blue and red lines of Alligator (upper histogram) and difference between red and green lines (lower histogram).
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="jawPeriod">Averaging period for the blue line (Alligator's Jaw).</param>
+        ///<param name="jawShift">The shift of the blue line relative to the price chart. It isn't directly connected with the visual shift of the indicator histogram.</param>
+        ///<param name="teethPeriod">Averaging period for the red line (Alligator's Teeth).</param>
+        ///<param name="teethShift">The shift of the red line relative to the price chart. It isn't directly connected with the visual shift of the indicator histogram.</param>
+        ///<param name="lipsPeriod">Averaging period for the green line (Alligator's lips).</param>
+        ///<param name="lipsShift">The shift of the green line relative to the price charts. It isn't directly connected with the visual shift of the indicator histogram.</param>
+        ///<param name="maMethod">Smoothing type. Can be one of the values of ENUM_MA_METHOD.</param>
+        ///<param name="appliedPrice">The price used. Can be any of the price constants ENUM_APPLIED_PRICE or a handle of another indicator.</param>
+        public int iGator(string symbol, ENUM_TIMEFRAMES period, int jawPeriod, int jawShift, int teethPeriod, 
+            int teethShift, int lipsPeriod, int lipsShift, ENUM_MA_METHOD maMethod, ENUM_APPLIED_PRICE appliedPrice)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, jawPeriod, jawShift, teethPeriod, teethShift, lipsPeriod, lipsShift, (int)maMethod, (int)appliedPrice };
+            return SendCommand<int>(Mt5CommandType.iGator, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Ichimoku Kinko Hyo indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="tenkanSen">Averaging period for Tenkan Sen.</param>
+        ///<param name="kijunSen">Averaging period for Kijun Sen.</param>
+        ///<param name="senkouSpanB">Averaging period for Senkou Span B.</param>
+        public int iIchimoku(string symbol, ENUM_TIMEFRAMES period, int tenkanSen, int kijunSen, int senkouSpanB)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, tenkanSen, kijunSen, senkouSpanB };
+            return SendCommand<int>(Mt5CommandType.iIchimoku, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Market Facilitation Index indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="appliedVolume">The volume used. Can be one of the constants of ENUM_APPLIED_VOLUME.</param>
+        public int iBWMFI(string symbol, ENUM_TIMEFRAMES period, ENUM_APPLIED_VOLUME appliedVolume)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, (int)appliedVolume };
+            return SendCommand<int>(Mt5CommandType.iBWMFI, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Momentum indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="momPeriod">Averaging period (bars count) for the calculation of the price change.</param>
+        ///<param name="appliedPrice">The price used. Can be any of the price constants ENUM_APPLIED_PRICE or a handle of another indicator.</param>
+        public int iMomentum(string symbol, ENUM_TIMEFRAMES period, int momPeriod, ENUM_APPLIED_PRICE appliedPrice)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, momPeriod, (int)appliedPrice };
+            return SendCommand<int>(Mt5CommandType.iMomentum, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Money Flow Index indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="maPeriod">Averaging period (bars count) for the calculation.</param>
+        ///<param name="appliedVolume">The volume used. Can be any of the ENUM_APPLIED_VOLUME values.</param>
+        public int iMFI(string symbol, ENUM_TIMEFRAMES period, int maPeriod, ENUM_APPLIED_VOLUME appliedVolume)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, maPeriod, (int)appliedVolume };
+            return SendCommand<int>(Mt5CommandType.iMFI, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Moving Average indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="maPeriod">Averaging period for the calculation of the moving average.</param>
+        ///<param name="maShift">Shift of the indicator relative to the price chart.</param>
+        ///<param name="maMethod">Smoothing type. Can be one of the ENUM_MA_METHOD values.</param>
+        ///<param name="appliedPrice">The price used. Can be any of the price constants ENUM_APPLIED_PRICE or a handle of another indicator.</param>
+        public int iMA(string symbol, ENUM_TIMEFRAMES period, int maPeriod, int maShift, ENUM_MA_METHOD maMethod, ENUM_APPLIED_PRICE appliedPrice)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, maPeriod, maShift, (int)maMethod, (int)appliedPrice };
+            return SendCommand<int>(Mt5CommandType.iMA, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Moving Average of Oscillator indicator. The OsMA oscillator shows the difference between values of MACD and its signal line. 
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="fastEmaPeriod">Period for Fast Moving Average calculation.</param>
+        ///<param name="slowEmaPeriod">Period for Slow Moving Average calculation.</param>
+        ///<param name="signalPeriod">Averaging period for signal line calculation.</param>
+        ///<param name="appliedPrice">The price used. Can be any of the price constants ENUM_APPLIED_PRICE or a handle of another indicator.</param>
+        public int iOsMA(string symbol, ENUM_TIMEFRAMES period, int fastEmaPeriod, int slowEmaPeriod, int signalPeriod, ENUM_APPLIED_PRICE appliedPrice)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, fastEmaPeriod, slowEmaPeriod, signalPeriod, (int)appliedPrice };
+            return SendCommand<int>(Mt5CommandType.iOsMA, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Moving Averages Convergence/Divergence indicator. In systems where OsMA is called MACD Histogram, this indicator is shown as two lines. In the client terminal the Moving Averages Convergence/Divergence looks like a histogram.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="fastEmaPeriod">Period for Fast Moving Average calculation.</param>
+        ///<param name="slowEmaPeriod">Period for Slow Moving Average calculation.</param>
+        ///<param name="signalPeriod">Averaging period for signal line calculation.</param>
+        ///<param name="appliedPrice">The price used. Can be any of the price constants ENUM_APPLIED_PRICE or a handle of another indicator.</param>
+        public int iMACD(string symbol, ENUM_TIMEFRAMES period, int fastEmaPeriod, int slowEmaPeriod, int signalPeriod, ENUM_APPLIED_PRICE appliedPrice)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, fastEmaPeriod, slowEmaPeriod, signalPeriod, (int)appliedPrice };
+            return SendCommand<int>(Mt5CommandType.iMACD, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the On Balance Volume indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="appliedVolume">The volume used. Can be any of the ENUM_APPLIED_VOLUME values.</param>
+        public int iOBV(string symbol, ENUM_TIMEFRAMES period, ENUM_APPLIED_VOLUME appliedVolume)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, (int)appliedVolume };
+            return SendCommand<int>(Mt5CommandType.iOBV, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Parabolic Stop and Reverse system indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="step">The step of price increment, usually  0.02.</param>
+        ///<param name="maximum">The maximum step, usually 0.2.</param>
+        public int iSAR(string symbol, ENUM_TIMEFRAMES period, double step, double maximum)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, step, maximum };
+            return SendCommand<int>(Mt5CommandType.iSAR, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Relative Strength Index indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="maPeriod">Averaging period for the RSI calculation.</param>
+        ///<param name="appliedPrice">The price used. Can be any of the price constants ENUM_APPLIED_PRICE or a handle of another indicator.</param>
+        public int iRSI(string symbol, ENUM_TIMEFRAMES period, int maPeriod, ENUM_APPLIED_PRICE appliedPrice)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, maPeriod, (int)appliedPrice };
+            return SendCommand<int>(Mt5CommandType.iRSI, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Relative Vigor Index indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="maPeriod">Averaging period for the RVI calculation.</param>
+        public int iRVI(string symbol, ENUM_TIMEFRAMES period, int maPeriod)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, maPeriod };
+            return SendCommand<int>(Mt5CommandType.iRVI, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Standard Deviation indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="maPeriod">Averaging period for the RVI calculation.</param>
+        ///<param name="maShift">Shift of the indicator relative to the price chart.</param>
+        ///<param name="maMethod">Type of averaging. Can be any of the ENUM_MA_METHOD values.</param>
+        ///<param name="appliedPrice">The price used. Can be any of the price constants ENUM_APPLIED_PRICE or a handle of another indicator.</param>
+        public int iStdDev(string symbol, ENUM_TIMEFRAMES period, int maPeriod, int maShift, ENUM_MA_METHOD maMethod, ENUM_APPLIED_PRICE appliedPrice)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, maPeriod, maShift, (int)maMethod, (int)appliedPrice };
+            return SendCommand<int>(Mt5CommandType.iStdDev, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Stochastic Oscillator indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="Kperiod">Averaging period (bars count) for the %K line calculation.</param>
+        ///<param name="Dperiod">Averaging period (bars count) for the %D line calculation.</param>
+        ///<param name="slowing">Slowing value.</param>
+        ///<param name="maMethod">Type of averaging. Can be any of the ENUM_MA_METHOD values.</param>
+        ///<param name="priceField">Parameter of price selection for calculations. Can be one of the ENUM_STO_PRICE values.</param>
+        public int iStochastic(string symbol, ENUM_TIMEFRAMES period, int Kperiod, int Dperiod, int slowing, ENUM_MA_METHOD maMethod, ENUM_STO_PRICE priceField)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, Kperiod, Dperiod, slowing, (int)maMethod, (int)priceField };
+            return SendCommand<int>(Mt5CommandType.iStochastic, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Triple Exponential Moving Average indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="maPeriod">Averaging period (bars count) for calculation.</param>
+        ///<param name="maShift">Shift of indicator relative to the price chart.</param>
+        ///<param name="appliedPrice">The price used. Can be any of the price constants ENUM_APPLIED_PRICE or a handle of another indicator.</param>
+        public int iTEMA(string symbol, ENUM_TIMEFRAMES period, int maPeriod, int maShift, ENUM_APPLIED_PRICE appliedPrice)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, maPeriod, maShift, (int)appliedPrice };
+            return SendCommand<int>(Mt5CommandType.iTEMA, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Triple Exponential Moving Averages Oscillator indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="maPeriod">Averaging period (bars count) for calculation.</param>
+        ///<param name="appliedPrice">The price used. Can be any of the price constants ENUM_APPLIED_PRICE or a handle of another indicator.</param>
+        public int iTriX(string symbol, ENUM_TIMEFRAMES period, int maPeriod, ENUM_APPLIED_PRICE appliedPrice)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, maPeriod, (int)appliedPrice };
+            return SendCommand<int>(Mt5CommandType.iTriX, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Larry Williams' Percent Range indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="calcPeriod">Period (bars count) for the indicator calculation.</param>
+        public int iWPR(string symbol, ENUM_TIMEFRAMES period, int calcPeriod)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, calcPeriod };
+            return SendCommand<int>(Mt5CommandType.iWPR, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Variable Index Dynamic Average indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="cmoPeriod">Period (bars count) for the Chande Momentum Oscillator calculation.</param>
+        ///<param name="emaPeriod">EMA period (bars count) for smoothing factor calculation.</param>
+        ///<param name="maShift">Shift of the indicator relative to the price chart.</param>
+        ///<param name="appliedPrice">The price used. Can be any of the price constants ENUM_APPLIED_PRICE or a handle of another indicator.</param>
+        public int iVIDyA(string symbol, ENUM_TIMEFRAMES period, int cmoPeriod, int emaPeriod, int maShift, ENUM_APPLIED_PRICE appliedPrice)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, cmoPeriod, emaPeriod, maShift, (int)appliedPrice };
+            return SendCommand<int>(Mt5CommandType.iVIDyA, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Volumes indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="appliedVolume">The volume used. Can be any of the ENUM_APPLIED_VOLUME values.</param>
+        public int iVolumes(string symbol, ENUM_TIMEFRAMES period, ENUM_APPLIED_VOLUME appliedVolume)
+        {
+            var commandParameters = new ArrayList { symbol, (int)period, (int)appliedVolume };
+            return SendCommand<int>(Mt5CommandType.iVolumes, commandParameters);
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Volumes indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="name">The name of the custom indicator, with path relative to the root directory of indicators (MQL5/Indicators/). If an indicator is located in a subdirectory, for example, in MQL5/Indicators/Examples, its name must be specified like: "Examples\\indicator_name" (it is necessary to use a double slash instead of the single slash as a separator).</param>
+        ///<param name="parameters">input-parameters of a custom indicator. If there is no parameters specified, then default values will be used.</param>
+        public int iCustom(string symbol, ENUM_TIMEFRAMES period, string name, double[] parameters)
+        {
+            Log.Debug("iCustom: called.");
+            var response = SendRequest<int>(new ICustomRequest
+            {
+                Symbol = symbol,
+                Timeframe = (int)period,
+                Name = name,
+                Params = new ArrayList(parameters),
+                ParamsType = ICustomRequest.ParametersType.Double
+            });
+            Log.Debug($"iCustom: response = {response}.");
+            return response;
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Volumes indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="name">The name of the custom indicator, with path relative to the root directory of indicators (MQL5/Indicators/). If an indicator is located in a subdirectory, for example, in MQL5/Indicators/Examples, its name must be specified like: "Examples\\indicator_name" (it is necessary to use a double slash instead of the single slash as a separator).</param>
+        ///<param name="parameters">input-parameters of a custom indicator. If there is no parameters specified, then default values will be used.</param>
+        public int iCustom(string symbol, ENUM_TIMEFRAMES period, string name, int[] parameters)
+        {
+            Log.Debug("iCustom: called.");
+            var response = SendRequest<int>(new ICustomRequest
+            {
+                Symbol = symbol,
+                Timeframe = (int)period,
+                Name = name,
+                Params = new ArrayList(parameters),
+                ParamsType = ICustomRequest.ParametersType.Int
+            });
+            Log.Debug($"iCustom: response = {response}.");
+            return response;
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Volumes indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="name">The name of the custom indicator, with path relative to the root directory of indicators (MQL5/Indicators/). If an indicator is located in a subdirectory, for example, in MQL5/Indicators/Examples, its name must be specified like: "Examples\\indicator_name" (it is necessary to use a double slash instead of the single slash as a separator).</param>
+        ///<param name="parameters">input-parameters of a custom indicator. If there is no parameters specified, then default values will be used.</param>
+        public int iCustom(string symbol, ENUM_TIMEFRAMES period, string name, string[] parameters)
+        {
+            Log.Debug("iCustom: called.");
+            var response = SendRequest<int>(new ICustomRequest
+            {
+                Symbol = symbol,
+                Timeframe = (int)period,
+                Name = name,
+                Params = new ArrayList(parameters),
+                ParamsType = ICustomRequest.ParametersType.Int
+            });
+            Log.Debug($"iCustom: response = {response}.");
+            return response;
+        }
+
+        ///<summary>
+        ///The function returns the handle of the Volumes indicator.
+        ///</summary>
+        ///<param name="symbol">The symbol name of the security, the data of which should be used to calculate the indicator.</param>
+        ///<param name="period">The value of the period can be one of the ENUM_TIMEFRAMES enumeration values, 0 means the current timeframe.</param>
+        ///<param name="name">The name of the custom indicator, with path relative to the root directory of indicators (MQL5/Indicators/). If an indicator is located in a subdirectory, for example, in MQL5/Indicators/Examples, its name must be specified like: "Examples\\indicator_name" (it is necessary to use a double slash instead of the single slash as a separator).</param>
+        ///<param name="parameters">input-parameters of a custom indicator. If there is no parameters specified, then default values will be used.</param>
+        public int iCustom(string symbol, ENUM_TIMEFRAMES period, string name, bool[] parameters)
+        {
+            Log.Debug("iCustom: called.");
+            var response = SendRequest<int>(new ICustomRequest
+            {
+                Symbol = symbol,
+                Timeframe = (int)period,
+                Name = name,
+                Params = new ArrayList(parameters),
+                ParamsType = ICustomRequest.ParametersType.Int
+            });
+            Log.Debug($"iCustom: response = {response}.");
+            return response;
+        }
+
+        #endregion //Technical Indicators
+
+        #region Date and Time
+
+        ///<summary>
+        ///Returns the last known server time, time of the last quote receipt for one of the symbols selected in the "Market Watch" window.
+        ///</summary>
+        public DateTime TimeCurrent()
+        {
+            Log.Debug("TimeCurrent: called.");
+            var response = SendCommand<long>(Mt5CommandType.TimeCurrent, null);
+            Log.Debug($"TimeCurrent: response = {response}.");
+            return Mt5TimeConverter.ConvertFromMtTime(response);
+        }
+
+        ///<summary>
+        ///Returns the calculated current time of the trade server. Unlike TimeCurrent(), the calculation of the time value is performed in the client terminal and depends on the time settings on your computer.
+        ///</summary>
+        public DateTime TimeTradeServer()
+        {
+            Log.Debug("TimeTradeServer: called.");
+            var response = SendCommand<long>(Mt5CommandType.TimeTradeServer, null);
+            Log.Debug($"TimeTradeServer: response = {response}.");
+            return Mt5TimeConverter.ConvertFromMtTime(response);
+        }
+
+        ///<summary>
+        ///Returns the local time of a computer, where the client terminal is running.
+        ///</summary>
+        public DateTime TimeLocal()
+        {
+            Log.Debug("TimeLocal: called.");
+            var response = SendCommand<long>(Mt5CommandType.TimeLocal, null);
+            Log.Debug($"TimeLocal: response = {response}.");
+            return Mt5TimeConverter.ConvertFromMtTime(response);
+        }
+
+        ///<summary>
+        ///Returns the GMT, which is calculated taking into account the DST switch by the local time on the computer where the client terminal is running.
+        ///</summary>
+        public DateTime TimeGMT()
+        {
+            Log.Debug("TimeGMT: called.");
+            var response = SendCommand<long>(Mt5CommandType.TimeGMT, null);
+            Log.Debug($"TimeGMT: response = {response}.");
+            return Mt5TimeConverter.ConvertFromMtTime(response);
+        }
+
+        #endregion //Date and Time
+
+        #region Checkup
+
+        ///<summary>
+        ///Returns the value of the last error that occurred during the execution of an mql5 program.
+        ///</summary>
+        public int GetLastError()
+        {
+            return SendCommand<int>(Mt5CommandType.GetLastError, null);
+        }
+
+        ///<summary>
+        ///Sets the value of the predefined variable _LastError into zero.
+        ///</summary>
+        public void ResetLastError()
+        {
+            SendCommand<object>(Mt5CommandType.ResetLastError, null);
+        }
+
+        #endregion
+
+        #region Global Variables
+
+        ///<summary>
+        ///Checks the existence of a global variable with the specified name.
+        ///</summary>
+        ///<param name="name">Global variable name.</param>
+        public bool GlobalVariableCheck(string name)
+        {
+            var commandParameters = new ArrayList { name };
+            return SendCommand<bool>(Mt5CommandType.GlobalVariableCheck, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the time when the global variable was last accessed.
+        ///</summary>
+        ///<param name="name">Name of the global variable.</param>
+        public DateTime GlobalVariableTime(string name)
+        {
+            var commandParameters = new ArrayList { name };
+            var res = SendCommand<int>(Mt5CommandType.GlobalVariableTime, commandParameters);
+            return Mt5TimeConverter.ConvertFromMtTime(res);
+        }
+
+        ///<summary>
+        ///Deletes a global variable from the client terminal.
+        ///</summary>
+        ///<param name="name">Name of the global variable.</param>
+        public bool GlobalVariableDel(string name)
+        {
+            var commandParameters = new ArrayList { name };
+            return SendCommand<bool>(Mt5CommandType.GlobalVariableDel, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the value of an existing global variable of the client terminal.
+        ///</summary>
+        ///<param name="name">Global variable name.</param>
+        public double GlobalVariableGet(string name)
+        {
+            var commandParameters = new ArrayList { name };
+            return SendCommand<double>(Mt5CommandType.GlobalVariableGet, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the name of a global variable by its ordinal number.
+        ///</summary>
+        ///<param name="index">Sequence number in the list of global variables. It should be greater than or equal to 0 and less than GlobalVariablesTotal().</param>
+        public string GlobalVariableName(int index)
+        {
+            var commandParameters = new ArrayList { index };
+            return SendCommand<string>(Mt5CommandType.GlobalVariableName, commandParameters);
+        }
+
+        ///<summary>
+        ///Sets a new value for a global variable. If the variable does not exist, the system creates a new global variable.
+        ///</summary>
+        ///<param name="name">Global variable name.</param>
+        ///<param name="value">The new numerical value.</param>
+        public DateTime GlobalVariableSet(string name, double value)
+        {
+            var commandParameters = new ArrayList { name, value };
+            var res = SendCommand<int>(Mt5CommandType.GlobalVariableSet, commandParameters);
+            return Mt5TimeConverter.ConvertFromMtTime(res);
+        }
+
+        ///<summary>
+        ///Forcibly saves contents of all global variables to a disk.
+        ///</summary>
+        public void GlobalVariablesFlush()
+        {
+            SendCommand<object>(Mt5CommandType.GlobalVariablesFlush, null);
+        }
+
+        ///<summary>
+        ///The function attempts to create a temporary global variable. If the variable doesn't exist, the system creates a new temporary global variable.
+        ///</summary>
+        ///<param name="name">The name of a temporary global variable.</param>
+        public bool GlobalVariableTemp(string name)
+        {
+            var commandParameters = new ArrayList { name };
+            return SendCommand<bool>(Mt5CommandType.GlobalVariableTemp, commandParameters);
+        }
+
+        ///<summary>
+        ///Sets the new value of the existing global variable if the current value equals to the third parameter check_value. If there is no global variable, the function will generate an error ERR_GLOBALVARIABLE_NOT_FOUND (4501) and return false.
+        ///</summary>
+        ///<param name="name">The name of a global variable.</param>
+        ///<param name="value">New value.</param>
+        ///<param name="checkValue">The value to check the current value of the global variable.</param>
+        public bool GlobalVariableSetOnCondition(string name, double value, double checkValue)
+        {
+            var commandParameters = new ArrayList { name, value, checkValue };
+            return SendCommand<bool>(Mt5CommandType.GlobalVariableSetOnCondition, commandParameters);
+        }
+
+        ///<summary>
+        ///Deletes global variables of the client terminal.
+        ///</summary>
+        ///<param name="prefixName">Name prefix global variables to remove. If you specify a prefix NULL or empty string, then all variables that meet the data criterion will be deleted.</param>
+        ///<param name="limitData">Date to select global variables by the time of their last modification. The function removes global variables, which were changed before this date. If the parameter is zero, then all variables that meet the first criterion (prefix) are deleted.</param>
+        public int GlobalVariablesDeleteAll(string prefixName = "", DateTime? limitData = null)
+        {
+            if (prefixName == null)
+                prefixName = "";
+            var commandParameters = new ArrayList { prefixName, Mt5TimeConverter.ConvertToMtTime(limitData) };
+            return SendCommand<int>(Mt5CommandType.GlobalVariablesDeleteAll, commandParameters);
+        }
+
+        ///<summary>
+        ///Returns the total number of global variables of the client terminal.
+        ///</summary>
+        public int GlobalVariablesTotal()
+        {
+            return SendCommand<int>(Mt5CommandType.GlobalVariablesTotal, null);
         }
         #endregion
 
+        #region Backtesting functions
+
+        ///<summary>
+        ///The function unlock ticks in backtesting mode.
+        ///</summary>
+        public void UnlockTicks()
+        {
+            SendCommand<object>(Mt5CommandType.UnlockTicks, null);
+        }
+
         #endregion
+
+        #endregion // Public Methods
 
         #region Properties
         ///<summary>
@@ -1450,9 +3121,14 @@ namespace MtApi5
 
         #region Events
         public event QuoteHandler QuoteUpdated;
+        public event EventHandler<Mt5QuoteEventArgs> QuoteUpdate;
         public event EventHandler<Mt5QuoteEventArgs> QuoteAdded;
         public event EventHandler<Mt5QuoteEventArgs> QuoteRemoved;
         public event EventHandler<Mt5ConnectionEventArgs> ConnectionStateChanged;
+        public event EventHandler<Mt5TradeTransactionEventArgs> OnTradeTransaction;
+        public event EventHandler<Mt5BookEventArgs> OnBookEvent;
+        public event EventHandler<Mt5TimeBarArgs> OnLastTimeBar;
+        public event EventHandler<Mt5LockTicksEventArgs> OnLockTicks;
         #endregion
 
         #region Private Methods
@@ -1506,6 +3182,7 @@ namespace MtApi5
                     _client.QuoteUpdated += _client_QuoteUpdated;
                     _client.ServerDisconnected += _client_ServerDisconnected;
                     _client.ServerFailed += _client_ServerFailed;
+                    _client.MtEventReceived += _client_MtEventReceived;
                     message = string.IsNullOrEmpty(client.Host) ? $"Connected to localhost:{client.Port}" : $"Connected to  { client.Host}:{client.Port}";
                 }
 
@@ -1518,6 +3195,62 @@ namespace MtApi5
             {
                 OnConnected();
             }
+        }
+
+
+        private void _client_MtEventReceived(MtEvent e)
+        {
+            var eventType = (Mt5EventTypes)e.EventType;
+            _mtEventHandlers[eventType](e.ExpertHandle, e.Payload);
+        }
+
+        private void ReceivedOnTradeTransactionEvent(int expertHandler, string payload)
+        {
+            var e = JsonConvert.DeserializeObject<OnTradeTransactionEvent>(payload);
+            OnTradeTransaction?.Invoke(this, new Mt5TradeTransactionEventArgs
+            {
+                ExpertHandle = expertHandler,
+                Trans = e.Trans,
+                Request = e.Request,
+                Result = e.Result
+            });
+        }
+
+        private void ReceivedOnBookEvent(int expertHandler, string payload)
+        {
+            var e = JsonConvert.DeserializeObject<OnBookEvent>(payload);
+            OnBookEvent?.Invoke(this, new Mt5BookEventArgs
+            {
+                ExpertHandle = expertHandler,
+                Symbol = e.Symbol
+            });
+        }
+
+        private void ReceivedOnTickEvent(int expertHandler, string payload)
+        {
+            var e = JsonConvert.DeserializeObject<OnTickEvent>(payload);
+            var quote = new Mt5Quote(e.Instrument, e.Tick.bid, e.Tick.ask)
+            {
+                ExpertHandle = expertHandler,
+                Volume = e.Tick.volume,
+                Time = e.Tick.time,
+                Last = e.Tick.last
+            };
+
+            QuoteUpdated?.Invoke(this, quote.Instrument, quote.Bid, quote.Ask);
+            QuoteUpdate?.Invoke(this, new Mt5QuoteEventArgs(quote));
+        }
+
+        private void ReceivedOnLastTimeBarEvent(int expertHandler, string payload)
+        {
+            var e = JsonConvert.DeserializeObject<OnLastTimeBarEvent>(payload);
+            OnLastTimeBar?.Invoke(this, new Mt5TimeBarArgs(expertHandler, e.Instrument, e.Rates));
+        }
+
+        private void ReceivedOnLockTicksEvent(int expertHandler, string payload)
+        {
+            var e = JsonConvert.DeserializeObject<OnLockTicksEvent>(payload);
+            OnLockTicks?.Invoke(this, new Mt5LockTicksEventArgs(e.Instrument));
         }
 
         private void Connect(string host, int port)
@@ -1550,6 +3283,7 @@ namespace MtApi5
                     _client.QuoteUpdated -= _client_QuoteUpdated;
                     _client.ServerDisconnected -= _client_ServerDisconnected;
                     _client.ServerFailed -= _client_ServerFailed;
+                    _client.MtEventReceived -= _client_MtEventReceived;
 
                     if (!failed)
                     {
@@ -1597,10 +3331,10 @@ namespace MtApi5
             }
 
             var responseValue = response.GetValue();
-            return responseValue != null ? (T)responseValue : default(T);
+            return (T) responseValue;
         }
 
-        private T SendRequest<T>(RequestBase request) where T : ResponseBase, new()
+        private T SendRequest<T>(RequestBase request)
         {
             if (request == null)
                 return default(T);
@@ -1619,22 +3353,21 @@ namespace MtApi5
                 throw new ExecutionException(ErrorCode.ErrCustom, "Response from MetaTrader is null");
             }
 
-            var response = JsonConvert.DeserializeObject<T>(res);
+            var response = JsonConvert.DeserializeObject<Response<T>>(res);
             if (response.ErrorCode != 0)
             {
                 throw new ExecutionException((ErrorCode)response.ErrorCode, response.ErrorMessage);
             }
 
-            return response;
+            return response.Value;
         }
 
 
         private void _client_QuoteUpdated(MtQuote quote)
         {
-            if (quote != null)
-            {
-                QuoteUpdated?.Invoke(this, quote.Instrument, quote.Bid, quote.Ask);
-            }
+            if (quote == null) return;
+            QuoteUpdate?.Invoke(this, new Mt5QuoteEventArgs(new Mt5Quote(quote)));
+            QuoteUpdated?.Invoke(this, quote.Instrument, quote.Bid, quote.Ask);
         }
 
         private void _client_ServerDisconnected(object sender, EventArgs e)
@@ -1649,18 +3382,23 @@ namespace MtApi5
 
         private void _client_QuoteRemoved(MtQuote quote)
         {
-            QuoteRemoved?.Invoke(this, new Mt5QuoteEventArgs(quote.Parse()));
+            if (quote != null)
+            {
+                QuoteRemoved?.Invoke(this, new Mt5QuoteEventArgs(new Mt5Quote(quote)));
+            }
         }
 
         private void _client_QuoteAdded(MtQuote quote)
         {
-            QuoteAdded?.Invoke(this, new Mt5QuoteEventArgs(quote.Parse()));
+            if (quote != null)
+            {
+                QuoteAdded?.Invoke(this, new Mt5QuoteEventArgs(new Mt5Quote(quote)));
+            }
         }
 
         private void OnConnected()
         {
-            // INFO: disabled backtesting mode while solution of window handle in testing mode is not found
-            //_isBacktestingMode = IsTesting();
+            _isBacktestingMode = IsTesting();
 
             if (_isBacktestingMode)
             {

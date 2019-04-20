@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-
+﻿// ReSharper disable InconsistentNaming
 namespace MtApi5
 {
     internal enum Mt5CommandType
@@ -10,10 +6,9 @@ namespace MtApi5
         //NoCommand = 0
 
         //trade operations
-        OrderSend                           = 1,
+        //OrderSend                           = 1,
         OrderCalcMargin                     = 2,
         OrderCalcProfit                     = 3,
-        OrderCheck                          = 4,
         //OrderSendAsync                      = 5,
         PositionsTotal                      = 6,
         PositionGetSymbol                   = 7,
@@ -21,6 +16,7 @@ namespace MtApi5
         PositionGetDouble                   = 9,
         PositionGetInteger                  = 10,
         PositionGetString                   = 11,
+        PositionGetTicket                   = 4,
         OrdersTotal                         = 12,
         OrderGetTicket                      = 13,
         OrderSelect                         = 14,
@@ -99,20 +95,162 @@ namespace MtApi5
         SymbolInfoSessionTrade              = 59,
         MarketBookAdd                       = 60,
         MarketBookRelease                   = 61,
-        MarketBookGet                       = 62,
+        //MarketBookGet                       = 62,
         OrderCloseAll                       = 63,
 
         //CTrade
         PositionClose                       = 64,
         PositionOpen                        = 65,
+        //PositionOpenWithResult              = 1065,
 
         //Backtesting
         BacktestingReady                    = 66,
         IsTesting                           = 67,
 
-        Print                               = 68,
-
         //Requests
         MtRequest                           = 155,
+
+        PositionSelectByTicket              = 69,
+
+        ObjectCreate                        = 70,
+        ObjectName                          = 71,
+        ObjectDelete                        = 72,
+        ObjectsDeleteAll                    = 73,
+        ObjectFind                          = 74,
+        ObjectGetTimeByValue                = 75,
+        ObjectGetValueByTime                = 76,
+        ObjectMove                          = 77,
+        ObjectsTotal                        = 78,
+        ObjectGetDouble                     = 79,
+        ObjectGetInteger                    = 80,
+        ObjectGetString                     = 81,
+        ObjectSetDouble                     = 82,
+        ObjectSetInteger                    = 83,
+        ObjectSetString                     = 84,
+        //TextSetFont                         = 85,
+        //TextOut                             = 86,
+        //TextGetSize                         = 87,
+
+        iAC                                 = 88,
+        iAD                                 = 89,
+        iADX                                = 90,
+        iADXWilder                          = 91,
+        iAlligator                          = 92,
+        iAMA                                = 93,
+        iAO                                 = 94,
+        iATR                                = 95,
+        iBearsPower                         = 96,
+        iBands                              = 97,
+        iBullsPower                         = 98,
+        iCCI                                = 99,
+        iChaikin                            = 100,
+        //iCustom                             = 101,
+        iDEMA                               = 102,
+        iDeMarker                           = 103,
+        iEnvelopes                          = 104,
+        iForce                              = 105,
+        iFractals                           = 106,
+        iFrAMA                              = 107,
+        iGator                              = 108,
+        iIchimoku                           = 109,
+        iBWMFI                              = 110,
+        iMomentum                           = 111,
+        iMFI                                = 112,
+        iMA                                 = 113,
+        iOsMA                               = 114,
+        iMACD                               = 115,
+        iOBV                                = 116,
+        iSAR                                = 117,
+        iRSI                                = 118,
+        iRVI                                = 119,
+        iStdDev                             = 120,
+        iStochastic                         = 121,
+        iTEMA                               = 122,
+        iTriX                               = 123,
+        iWPR                                = 124,
+        iVIDyA                              = 125,
+        iVolumes                            = 126,
+
+        //Date and Time
+        TimeCurrent                         = 127,
+        TimeTradeServer                     = 128,
+        TimeLocal                           = 129,
+        TimeGMT                             = 130,
+
+        IndicatorRelease                    = 131,
+
+        //Chart Operations
+        ChartId                             = 206,
+        ChartRedraw                         = 207,
+        ChartApplyTemplate                  = 236,
+        ChartSaveTemplate                   = 237,
+        ChartWindowFind                     = 238,
+        //ChartTimePriceToXY                  = 239,
+        //ChartXYToTimePrice                  = 240,
+        ChartOpen                           = 241,
+        ChartFirst                          = 242,
+        ChartNext                           = 243,
+        ChartClose                          = 244,
+        ChartSymbol                         = 245,
+        ChartPeriod                         = 246,
+        ChartSetDouble                      = 247,
+        ChartSetInteger                     = 248,
+        ChartSetString                      = 249,
+        ChartGetDouble                      = 250,
+        ChartGetInteger                     = 251,
+        ChartGetString                      = 252,
+        ChartNavigate                       = 253,
+        ChartIndicatorDelete                = 254,
+        ChartIndicatorName                  = 255,
+        ChartIndicatorsTotal                = 256,
+        ChartWindowOnDropped                = 257,
+        ChartPriceOnDropped                 = 258,
+        ChartTimeOnDropped                  = 259,
+        ChartXOnDropped                     = 260,
+        ChartYOnDropped                     = 261,
+        ChartSetSymbolPeriod                = 262,
+        ChartScreenShot                     = 263,
+        ChartIndicatorAdd                   = 280,
+        ChartIndicatorGet                   = 281,
+
+        // Terminal Operations
+        TerminalCompany                     = 68,
+        TerminalName                        = 69,
+        TerminalPath                        = 70,
+
+        //Checkup
+        GetLastError                        = 132,
+        TerminalInfoString                  = 153,
+        TerminalInfoInteger                 = 204,
+        TerminalInfoDouble                  = 205,
+
+        //Common Functions
+        Alert                               = 136,
+        Comment                             = 137,  //TODO
+        GetTickCount                        = 138,  //TODO
+        GetMicrosecondCount                 = 139,  //TODO
+        MessageBox                          = 140,  //TODO
+        PeriodSeconds                       = 141,  //TODO
+        PlaySound                           = 142,  //TODO
+        Print                               = 68,
+        ResetLastError                      = 143,
+        SendNotification                    = 144,  //TODO
+        SendMail                            = 145,  //TODO
+
+        //Global Variables
+        GlobalVariableCheck                 = 146,
+        GlobalVariableTime                  = 147,
+        GlobalVariableDel                   = 148,
+        GlobalVariableGet                   = 149,
+        GlobalVariableName                  = 150,
+        GlobalVariableSet                   = 151,
+        GlobalVariablesFlush                = 152,
+        GlobalVariableTemp                  = 154,
+        GlobalVariableSetOnCondition        = 156,
+        GlobalVariablesDeleteAll            = 157,
+        GlobalVariablesTotal                = 158,
+
+        UnlockTicks                         = 159,
+        PositionCloseAll                    = 160
     }
 }

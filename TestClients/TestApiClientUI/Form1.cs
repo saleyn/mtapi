@@ -34,6 +34,7 @@ namespace TestApiClientUI
             comboBox9.DataSource = Enum.GetNames(typeof(EnumTerminalInfoInteger));
             comboBox10.DataSource = Enum.GetNames(typeof(EnumTerminalInfoDouble));
             comboBox11.DataSource = Enum.GetNames(typeof(EnumObject));
+            comboBox12.DataSource = Enum.GetNames(typeof(ENUM_TERMINAL_INFO_STRING));
             comboBoxAccountInfoCmd.DataSource = Enum.GetNames(typeof(TradeOperation));
 
             _apiClient.QuoteUpdated += apiClient_QuoteUpdated;
@@ -42,6 +43,7 @@ namespace TestApiClientUI
             _apiClient.QuoteRemoved += apiClient_QuoteRemoved;
             _apiClient.ConnectionStateChanged += apiClient_ConnectionStateChanged;
             _apiClient.OnLastTimeBar += _apiClient_OnLastTimeBar;
+            _apiClient.OnChartEvent += _apiClient_OnChartEvent;
 
             InitOrderCommandsGroup();
 
@@ -134,14 +136,22 @@ namespace TestApiClientUI
         private void _apiClient_OnLastTimeBar(object sender, TimeBarArgs e)
         {
             var msg =
-                $"TimeBar: Symbol = {e.TimeBar.Symbol}, OpenTime = {e.TimeBar.OpenTime}, CloseTime = {e.TimeBar.CloseTime}, Open = {e.TimeBar.Open}, Close = {e.TimeBar.Close}, High = {e.TimeBar.High}, Low = {e.TimeBar.Low}";
+                $"TimeBar: ExpertHandle = {e.ExpertHandle}, Symbol = {e.TimeBar.Symbol}, OpenTime = {e.TimeBar.OpenTime}, CloseTime = {e.TimeBar.CloseTime}, Open = {e.TimeBar.Open}, Close = {e.TimeBar.Close}, High = {e.TimeBar.High}, Low = {e.TimeBar.Low}";
+            Console.WriteLine(msg);
+            PrintLog(msg);
+        }
+
+        private void _apiClient_OnChartEvent(object sender, ChartEventArgs e)
+        {
+            var msg =
+                $"OnChartEvent: ExpertHandle = {e.ExpertHandle}, ChartId = {e.ChartId}, EventId = {e.EventId}, Lparam = {e.Lparam}, Dparam = {e.Dparam}, Sparam = {e.Sparam}";
             Console.WriteLine(msg);
             PrintLog(msg);
         }
 
         private void apiClient_QuoteUpdated(object sender, string symbol, double bid, double ask)
         {
-            Console.WriteLine(@"Quote: Symbol = {0}, Bid = {1}, Ask = {2}", symbol, bid, ask);            
+            Console.WriteLine(@"Quote: Symbol = {0}, Bid = {1}, Ask = {2}", symbol, bid, ask);
         }
 
         private void _apiClient_QuoteUpdate(object sender, MtQuoteEventArgs e)
@@ -606,18 +616,28 @@ namespace TestApiClientUI
             listBoxProceHistory.DataSource = items;
         }
 
+        //TimeCurrent
         private void button13_Click(object sender, EventArgs e)
         {
             var retVal = _apiClient.TimeCurrent();
             PrintLog($"TimeCurrent result: {retVal}");
         }
 
+        //TimeLocal
         private void button14_Click(object sender, EventArgs e)
         {
             var retVal = _apiClient.TimeLocal();
             PrintLog($"TimeLocal result: {retVal}");
         }
 
+        //TimeGMT
+        private void button73_Click(object sender, EventArgs e)
+        {
+            var retVal = _apiClient.TimeGMT();
+            PrintLog($"TimeGMT result: {retVal}");
+        }
+
+        //RefreshRates
         private void buttonRefreshRates_Click(object sender, EventArgs e)
         {
             var retVal = _apiClient.RefreshRates();
@@ -673,6 +693,8 @@ namespace TestApiClientUI
         //OrderSend
         private async void button1_Click(object sender, EventArgs e)
         {
+            var ticket = -1;
+
             var symbol = textBoxOrderSymbol.Text;
 
             var cmd = (TradeOperation) comboBoxOrderCommand.SelectedIndex;
@@ -693,28 +715,43 @@ namespace TestApiClientUI
 
             var comment = textBoxOrderComment.Text;
 
-            int magic;
-            int.TryParse(textBoxOrderMagic.Text, out magic);
-
-            var expiration = DateTime.Now;
-
-            Color arrowColor;
-            switch (comboBoxOrderColor.SelectedIndex)
+            if (string.IsNullOrEmpty(comment))
             {
-                case 0:
-                    arrowColor = Color.Green;
-                    break;
-                case 1:
-                    arrowColor = Color.Blue;
-                    break;
-                case 2:
-                    arrowColor = Color.Red;
-                    break;
-                default:
-                    return;
+                ticket = await Execute(() => _apiClient.OrderSend(symbol, cmd, volume, price, slippage, stoploss, takeprofit));
             }
-
-            var ticket = await Execute(() => _apiClient.OrderSend(symbol, cmd, volume, price, slippage, stoploss, takeprofit, comment, magic, expiration, arrowColor));
+            else
+            {
+                int magic;
+                if (!int.TryParse(textBoxOrderMagic.Text, out magic))
+                {
+                    ticket = await Execute(() => _apiClient.OrderSend(symbol, cmd, volume, price, slippage, stoploss, takeprofit, comment));
+                }
+                else
+                {
+                    if (comboBoxOrderColor.SelectedIndex < 0 || comboBoxOrderColor.SelectedIndex > 2)
+                    {
+                        ticket = await Execute(() => _apiClient.OrderSend(symbol, cmd, volume, price, slippage, stoploss, takeprofit, comment, magic));
+                    }
+                    else
+                    {
+                        var expiration = DateTime.Now.AddDays(1);
+                        Color arrowColor = Color.White;
+                        switch (comboBoxOrderColor.SelectedIndex)
+                        {
+                            case 0:
+                                arrowColor = Color.Green;
+                                break;
+                            case 1:
+                                arrowColor = Color.Blue;
+                                break;
+                            case 2:
+                                arrowColor = Color.Red;
+                                break;
+                        }
+                        ticket = await Execute(() => _apiClient.OrderSend(symbol, cmd, volume, price, slippage, stoploss, takeprofit, comment, magic, expiration, arrowColor));
+                    }
+                }
+            }
 
             PrintLog($"Sended order result: ticket = {ticket}");
         }
@@ -1103,6 +1140,16 @@ namespace TestApiClientUI
             PrintLog($"TerminalInfoDouble: result = {result}");
         }
 
+        //TerminalInfoString
+        private async void button72_Click(object sender, EventArgs e)
+        {
+            ENUM_TERMINAL_INFO_STRING propId;
+            Enum.TryParse(comboBox12.Text, out propId);
+
+            var result = await Execute(() => _apiClient.TerminalInfoString(propId));
+            PrintLog($"TerminalInfoString: result = {result}");
+        }
+
         private void checkBox2_CheckedChanged(object sender, EventArgs e)
         {
             var checkbox = sender as CheckBox;
@@ -1401,6 +1448,56 @@ namespace TestApiClientUI
 
             var result = await Execute(() => _apiClient.ObjectName(chartId, objectIndex));
             PrintLog($"ObjectName result: {result}");
+        }
+
+        private void button69_Click(object sender, EventArgs e)
+        {
+            _apiClient.UnlockTicks();
+        }
+
+        private async void button70_Click(object sender, EventArgs e)
+        {
+            var login = textBoxAccountLogin.Text;
+            var password = textBoxAccountPassword.Text;
+            var host = textBoxAccountHost.Text;
+
+            if (string.IsNullOrEmpty(login))
+            {
+                MessageBox.Show(@"Login is not defined!", @"Warning", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                textBoxAccountLogin.Focus();
+                return;
+            }
+            if (string.IsNullOrEmpty(password))
+            {
+                MessageBox.Show(@"Password is not defined!", @"Warning", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                textBoxAccountPassword.Focus();
+                return;
+            }
+            if (string.IsNullOrEmpty(host))
+            {
+                MessageBox.Show(@"Host is not defined!", @"Warning", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                textBoxAccountHost.Focus();
+                return;
+            }
+
+            var result = await Execute(() => _apiClient.ChangeAccount(login, password, host));
+            PrintLog($"ChangeAccount result: {result}");
+        }
+
+        //iBarShift
+        private async void button71_Click(object sender, EventArgs e)
+        {
+            const string symbol = "EURUSD";
+            const ChartPeriod timeframe = ChartPeriod.PERIOD_D1;
+
+            var time1 = _apiClient.TimeCurrent();
+            var time2 = _apiClient.iTime(symbol, timeframe, 5);
+
+            var result1 = await Execute(() => _apiClient.iBarShift(symbol, timeframe, time1, true));
+            var result2 = await Execute(() => _apiClient.iBarShift(symbol, timeframe, time2, true));
+
+            PrintLog($"iBarShift result1 = {result1}, time = {time1}");
+            PrintLog($"iBarShift result2 = {result2}, time = {time2}");
         }
     }
 }

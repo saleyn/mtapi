@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-
+﻿// ReSharper disable InconsistentNaming
 namespace MtApi5
 {
     public class MqlBookInfo
@@ -14,8 +10,16 @@ namespace MtApi5
             this.volume = volume;
         }
 
-        public ENUM_BOOK_TYPE type { get; private set; }    // Order type from ENUM_BOOK_TYPE enumeration
-        public double price { get; private set; }           // Price
-        public long volume { get; private set; }            // Volume
+        public MqlBookInfo()
+        { }
+
+        public ENUM_BOOK_TYPE type { get; set; }    // Order type from ENUM_BOOK_TYPE enumeration
+        public double price { get; set; }           // Price
+        public long volume { get; set; }            // Volume
+
+        public override string ToString()
+        {
+            return $"type = {type}; price = {price}; volume = {volume}";
+        }
     }
 }
